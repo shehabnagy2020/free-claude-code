@@ -15,8 +15,11 @@ module.exports = {
       autorestart: true,
       max_restarts: 10,
       restart_delay: 5000,
+      max_memory_restart: "500M",
+      node_args: undefined,
       env: {
         PYTHONUNBUFFERED: "1",
+        UVICORN_LIMIT_CONCURRENCY: 50,
       },
     },
   ],

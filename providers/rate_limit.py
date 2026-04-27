@@ -193,6 +193,9 @@ class GlobalRateLimiter:
         finally:
             self._concurrency_sem.release()
 
+    # Status codes that warrant automatic retry with backoff.
+    _RETRYABLE_STATUS_CODES: ClassVar[set[int]] = {429, 502, 503, 504, 529}
+
     async def execute_with_retry(
         self,
         fn: Callable[..., Any],
@@ -203,10 +206,10 @@ class GlobalRateLimiter:
         jitter: float = 1.0,
         **kwargs: Any,
     ) -> Any:
-        """Execute an async callable with rate limiting and retry on 429.
+        """Execute an async callable with rate limiting and retry on transient errors.
 
-        Waits for the proactive limiter before each attempt. On 429, applies
-        exponential backoff with jitter before retrying.
+        Waits for the proactive limiter before each attempt. On 429/529/5xx
+        transient errors, applies exponential backoff with jitter before retrying.
 
         Args:
             fn: Async callable to execute.
@@ -245,22 +248,24 @@ class GlobalRateLimiter:
                 self.set_blocked(delay)
                 await asyncio.sleep(delay)
             except httpx.HTTPStatusError as e:
-                if e.response.status_code != 429:
+                status = e.response.status_code
+                if status not in self._RETRYABLE_STATUS_CODES:
                     raise
                 last_exc = e
                 if attempt >= max_retries:
                     logger.warning(
-                        f"HTTP 429 retry exhausted after {max_retries} retries"
+                        f"HTTP {status} retry exhausted after {max_retries} retries"
                     )
                     break
 
                 delay = min(base_delay * (2**attempt), max_delay)
                 delay += random.uniform(0, jitter)
                 logger.warning(
-                    f"HTTP 429 from upstream, attempt {attempt + 1}/{max_retries + 1}. "
+                    f"HTTP {status} from upstream, attempt {attempt + 1}/{max_retries + 1}. "
                     f"Retrying in {delay:.1f}s..."
                 )
-                self.set_blocked(delay)
+                if status in (429, 529):
+                    self.set_blocked(delay)
                 await asyncio.sleep(delay)
 
         assert last_exc is not None

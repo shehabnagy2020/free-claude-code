@@ -279,6 +279,101 @@ class TestProviderRateLimiter:
         assert call_count == 2
 
     @pytest.mark.asyncio
+    async def test_execute_with_retry_succeeds_on_httpx_529(self):
+        """HTTP 529 (overloaded) as httpx.HTTPStatusError then success returns result."""
+        import httpx
+        from httpx import Request, Response
+
+        limiter = GlobalRateLimiter.get_instance(rate_limit=100, rate_window=60)
+
+        call_count = 0
+
+        async def fail_then_ok():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                r = Response(
+                    529, request=Request("POST", "http://x"), text="overloaded"
+                )
+                raise httpx.HTTPStatusError("Overloaded", request=r.request, response=r)
+            return "ok"
+
+        result = await limiter.execute_with_retry(
+            fail_then_ok, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
+        )
+        assert result == "ok"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_execute_with_retry_succeeds_on_httpx_502(self):
+        """HTTP 502 (bad gateway) as httpx.HTTPStatusError then success returns result."""
+        import httpx
+        from httpx import Request, Response
+
+        limiter = GlobalRateLimiter.get_instance(rate_limit=100, rate_window=60)
+
+        call_count = 0
+
+        async def fail_then_ok():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                r = Response(
+                    502, request=Request("POST", "http://x"), text="bad gateway"
+                )
+                raise httpx.HTTPStatusError(
+                    "Bad Gateway", request=r.request, response=r
+                )
+            return "ok"
+
+        result = await limiter.execute_with_retry(
+            fail_then_ok, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
+        )
+        assert result == "ok"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_execute_with_retry_exhaust_retries_on_529(self):
+        """When all 529 retries exhausted, last exception is raised."""
+        import httpx
+        from httpx import Request, Response
+
+        GlobalRateLimiter.reset_instance()
+        limiter = GlobalRateLimiter.get_instance(rate_limit=100, rate_window=60)
+
+        async def fail():
+            r = Response(529, request=Request("POST", "http://x"), text="overloaded")
+            raise httpx.HTTPStatusError("Overloaded", request=r.request, response=r)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await limiter.execute_with_retry(
+                fail, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
+            )
+
+    @pytest.mark.asyncio
+    async def test_execute_with_retry_non_retryable_status_raises_immediately(self):
+        """HTTP 400 (non-retryable) is not retried; raised immediately."""
+        import httpx
+        from httpx import Request, Response
+
+        GlobalRateLimiter.reset_instance()
+        limiter = GlobalRateLimiter.get_instance(rate_limit=100, rate_window=60)
+
+        call_count = 0
+
+        async def fail():
+            nonlocal call_count
+            call_count += 1
+            r = Response(400, request=Request("POST", "http://x"), text="bad request")
+            raise httpx.HTTPStatusError("Bad Request", request=r.request, response=r)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await limiter.execute_with_retry(
+                fail, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
+            )
+        assert call_count == 1
+
+    @pytest.mark.asyncio
     async def test_max_concurrency_zero_raises(self):
         """max_concurrency <= 0 raises ValueError."""
         GlobalRateLimiter.reset_instance()
