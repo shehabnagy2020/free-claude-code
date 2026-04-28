@@ -6,6 +6,15 @@ from typing import Any
 
 
 @dataclass
+class ImageAttachment:
+    """Image attachment with base64 data and media type."""
+
+    data: str  # base64-encoded image data
+    media_type: str  # e.g. "image/png", "image/jpeg"
+    filename: str | None = None
+
+
+@dataclass
 class IncomingMessage:
     """
     Platform-agnostic incoming message.
@@ -28,9 +37,16 @@ class IncomingMessage:
     status_message_id: str | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
+    # Image attachments (platform-agnostic)
+    images: list[ImageAttachment] = field(default_factory=list)
+
     # Platform-specific raw event for edge cases
     raw_event: Any = None
 
     def is_reply(self) -> bool:
         """Check if this message is a reply to another message."""
         return self.reply_to_message_id is not None
+
+    def has_images(self) -> bool:
+        """Check if this message has image attachments."""
+        return bool(self.images)

@@ -42,6 +42,13 @@ def _walk_block_list_for_unsupported(blocks: Any, *, where: str) -> None:
             continue
         btype = block.get("type")
         if btype in _UNSUPPORTED_MESSAGE_BLOCK_TYPES:
+            if btype == "image":
+                raise InvalidRequestError(
+                    f"Model does not support image/vision input ({where}). "
+                    f"This is a text-only model. Use a vision-capable model "
+                    f"(e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o, Gemini) or "
+                    f"switch to a provider/model that supports multimodal input."
+                )
             raise InvalidRequestError(
                 f"DeepSeek native does not support {btype!r} blocks ({where})."
             )

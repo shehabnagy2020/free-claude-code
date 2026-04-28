@@ -31,6 +31,9 @@ class SessionManagerInterface(Protocol):
     Implementations: CLISessionManager
     """
 
+    api_url: str
+    """API URL for the proxy (e.g. http://localhost:8082)"""
+
     async def get_or_create_session(
         self, session_id: str | None = None
     ) -> tuple[CLISession, str, bool]:

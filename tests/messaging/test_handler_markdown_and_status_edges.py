@@ -327,6 +327,7 @@ async def test_handle_message_incoming_text_none_safe():
     incoming.platform = "telegram"
     incoming.reply_to_message_id = None
     incoming.is_reply = MagicMock(return_value=False)
+    incoming.has_images = MagicMock(return_value=False)
 
     await handler.handle_message(incoming)
     mock_queue.create_tree.assert_awaited_once()

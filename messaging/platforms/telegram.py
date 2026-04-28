@@ -5,6 +5,7 @@ Implements MessagingPlatform for Telegram using python-telegram-bot.
 """
 
 import asyncio
+import base64
 import contextlib
 import os
 import tempfile
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from telegram import Update
     from telegram.ext import ContextTypes
 
-from ..models import IncomingMessage
+from ..models import ImageAttachment, IncomingMessage
 from ..rendering.telegram_markdown import escape_md_v2, format_status
 from ..voice import PendingVoiceRegistry, VoiceTranscriptionService
 from .base import MessagingPlatform
@@ -122,6 +123,57 @@ class TelegramPlatform(MessagingPlatform):
         """Check if a voice note is still pending (not cancelled)."""
         return await self._pending_voice.is_pending(chat_id, voice_msg_id)
 
+    def _get_photo_file_id(self, message: Any) -> str | None:
+        """Get the file_id of the largest photo."""
+        if not message.photo:
+            return None
+        # Telegram sends multiple sizes; last is largest
+        return message.photo[-1].file_id
+
+    def _get_document_file_id(self, message: Any) -> tuple[str, str] | None:
+        """Get file_id and mime_type if document is an image."""
+        if not message.document:
+            return None
+        doc = message.document
+        mime_type = doc.mime_type or ""
+        if mime_type.startswith("image/"):
+            return doc.file_id, mime_type
+        return None
+
+    async def _extract_image_data(
+        self, context: Any, file_id: str, mime_type: str, filename: str | None = None
+    ) -> ImageAttachment:
+        """Download image via Telegram bot API and return as ImageAttachment."""
+        # Determine extension from mime type
+        ext_map = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+        }
+        ext = ext_map.get(mime_type, ".png")
+        if not filename:
+            filename = f"image{ext}"
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        try:
+            tg_file = await context.bot.get_file(file_id)
+            await tg_file.download_to_drive(custom_path=str(tmp_path))
+
+            with open(tmp_path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode("utf-8")
+
+            return ImageAttachment(
+                data=image_data,
+                media_type=mime_type,
+                filename=filename,
+            )
+        finally:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+
     async def start(self) -> None:
         """Initialize and connect to Telegram."""
         if not self.bot_token:
@@ -149,6 +201,10 @@ class TelegramPlatform(MessagingPlatform):
         # Voice note handler
         self._application.add_handler(
             MessageHandler(filters.VOICE, self._on_telegram_voice)
+        )
+        # Photo handler (photos with optional caption)
+        self._application.add_handler(
+            MessageHandler(filters.PHOTO, self._on_telegram_photo)
         )
 
         # Initialize internal components with retry logic
@@ -495,13 +551,12 @@ class TelegramPlatform(MessagingPlatform):
     async def _on_telegram_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle incoming updates."""
-        if (
-            not update.message
-            or not update.message.text
-            or not update.effective_user
-            or not update.effective_chat
-        ):
+        """Handle incoming text/command messages (may include images as documents)."""
+        if not update.message or not update.effective_user or not update.effective_chat:
+            return
+
+        # Skip if no text content (pure document messages handled elsewhere)
+        if not update.message.text and not update.message.document:
             return
 
         user_id = str(update.effective_user.id)
@@ -523,32 +578,48 @@ class TelegramPlatform(MessagingPlatform):
             if getattr(update.message, "message_thread_id", None) is not None
             else None
         )
+
+        # Extract image from document if present
+        images: list[ImageAttachment] = []
+        doc_image = self._get_document_file_id(update.message)
+        if doc_image:
+            file_id, mime_type = doc_image
+            try:
+                img = await self._extract_image_data(
+                    context, file_id, mime_type, filename=None
+                )
+                images.append(img)
+            except Exception as e:
+                logger.warning("Failed to extract document image: {}", type(e).__name__)
+
         raw_text = update.message.text or ""
         if self._log_raw_messaging_content:
             text_preview = raw_text[:80]
             if len(raw_text) > 80:
                 text_preview += "..."
             logger.info(
-                "TELEGRAM_MSG: chat_id={} message_id={} reply_to={} text_preview={!r}",
+                "TELEGRAM_MSG: chat_id={} message_id={} reply_to={} text_preview={!r} images={}",
                 chat_id,
                 message_id,
                 reply_to,
                 text_preview,
+                len(images),
             )
         else:
             logger.info(
-                "TELEGRAM_MSG: chat_id={} message_id={} reply_to={} text_len={}",
+                "TELEGRAM_MSG: chat_id={} message_id={} reply_to={} text_len={} images={}",
                 chat_id,
                 message_id,
                 reply_to,
                 len(raw_text),
+                len(images),
             )
 
         if not self._message_handler:
             return
 
         incoming = IncomingMessage(
-            text=update.message.text,
+            text=raw_text,
             chat_id=chat_id,
             user_id=user_id,
             message_id=message_id,
@@ -556,6 +627,7 @@ class TelegramPlatform(MessagingPlatform):
             reply_to_message_id=reply_to,
             message_thread_id=thread_id,
             raw_event=update,
+            images=images,
         )
 
         try:
@@ -698,3 +770,108 @@ class TelegramPlatform(MessagingPlatform):
         finally:
             with contextlib.suppress(OSError):
                 tmp_path.unlink(missing_ok=True)
+
+    async def _on_telegram_photo(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle incoming photo messages (with optional caption)."""
+        if (
+            not update.message
+            or not update.message.photo
+            or not update.effective_user
+            or not update.effective_chat
+        ):
+            return
+
+        user_id = str(update.effective_user.id)
+        chat_id = str(update.effective_chat.id)
+
+        # Security check
+        if self.allowed_user_id and user_id != str(self.allowed_user_id).strip():
+            logger.warning(f"Unauthorized access attempt from {user_id}")
+            return
+
+        if not self._message_handler:
+            return
+
+        message_id = str(update.message.message_id)
+        reply_to = (
+            str(update.message.reply_to_message.message_id)
+            if update.message.reply_to_message
+            else None
+        )
+        thread_id = (
+            str(update.message.message_thread_id)
+            if getattr(update.message, "message_thread_id", None) is not None
+            else None
+        )
+
+        # Get the largest photo
+        file_id = self._get_photo_file_id(update.message)
+        if not file_id:
+            return
+
+        # Send status message
+        status_msg_id = await self.queue_send_message(
+            chat_id,
+            format_status("⏳", "Processing image..."),
+            reply_to=str(update.message.message_id),
+            parse_mode="MarkdownV2",
+            fire_and_forget=False,
+            message_thread_id=thread_id,
+        )
+
+        try:
+            # Download and extract image
+            img = await self._extract_image_data(
+                context, file_id, "image/jpeg", filename="photo.jpg"
+            )
+
+            if not await self._is_voice_still_pending(chat_id, message_id):
+                await self.queue_delete_message(chat_id, str(status_msg_id))
+                return
+
+            await self._pending_voice.complete(chat_id, message_id, str(status_msg_id))
+
+            # Build incoming message with caption as text
+            caption = update.message.caption or ""
+            incoming = IncomingMessage(
+                text=caption,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                platform="telegram",
+                reply_to_message_id=reply_to,
+                message_thread_id=thread_id,
+                raw_event=update,
+                images=[img],
+                status_message_id=status_msg_id,
+            )
+
+            if self._log_raw_messaging_content:
+                text_preview = caption[:80]
+                if len(caption) > 80:
+                    text_preview += "..."
+                logger.info(
+                    "TELEGRAM_PHOTO: chat_id={} message_id={} caption={!r}",
+                    chat_id,
+                    message_id,
+                    text_preview,
+                )
+            else:
+                logger.info(
+                    "TELEGRAM_PHOTO: chat_id={} message_id={} caption_len={}",
+                    chat_id,
+                    message_id,
+                    len(caption),
+                )
+
+            await self._message_handler(incoming)
+        except Exception as e:
+            if self._log_api_error_tracebacks:
+                logger.error("Photo processing failed: {}", e)
+            else:
+                logger.error("Photo processing failed: exc_type={}", type(e).__name__)
+            await update.message.reply_text(
+                "Could not process image. Please try again or send text."
+            )

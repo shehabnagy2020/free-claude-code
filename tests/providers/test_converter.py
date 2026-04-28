@@ -564,13 +564,37 @@ def test_assistant_redacted_thinking_omitted_from_openai_chat():
     assert "reasoning_content" not in result[0]
 
 
-def test_convert_user_message_image_raises():
+def test_convert_user_message_image_url():
+    """User image blocks with URL source are converted to OpenAI image_url format."""
     content = [
-        MockBlock(type="image", source={"type": "url", "url": "https://example.com/x"})
+        MockBlock(
+            type="image", source={"type": "url", "url": "https://example.com/x.png"}
+        )
     ]
     messages = [MockMessage("user", content)]
-    with pytest.raises(OpenAIConversionError):
-        AnthropicToOpenAIConverter.convert_messages(messages)
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert result[0]["content"][0]["type"] == "image_url"
+    assert result[0]["content"][0]["image_url"]["url"] == "https://example.com/x.png"
+
+
+def test_convert_user_message_image_base64():
+    """User image blocks with base64 source are converted to OpenAI image_url format."""
+    content = [
+        MockBlock(
+            type="image",
+            source={"type": "base64", "media_type": "image/png", "data": "abc123"},
+        )
+    ]
+    messages = [MockMessage("user", content)]
+    result = AnthropicToOpenAIConverter.convert_messages(messages)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert isinstance(result[0]["content"], list)
+    assert result[0]["content"][0]["type"] == "image_url"
+    assert result[0]["content"][0]["image_url"]["url"] == "data:image/png;base64,abc123"
 
 
 def test_convert_assistant_text_after_tool_use_splits_for_openai_chat():

@@ -5,6 +5,7 @@ Implements MessagingPlatform for Discord using discord.py.
 """
 
 import asyncio
+import base64
 import contextlib
 import tempfile
 from collections.abc import Awaitable, Callable
@@ -15,12 +16,20 @@ from loguru import logger
 
 from core.anthropic import format_user_error_preview
 
-from ..models import IncomingMessage
+from ..models import ImageAttachment, IncomingMessage
 from ..rendering.discord_markdown import format_status_discord
 from ..voice import PendingVoiceRegistry, VoiceTranscriptionService
 from .base import MessagingPlatform
 
 AUDIO_EXTENSIONS = (".ogg", ".mp4", ".mp3", ".wav", ".m4a")
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 _discord_module: Any = None
 try:
@@ -168,6 +177,44 @@ class DiscordPlatform(MessagingPlatform):
                 return att
         return None
 
+    def _get_image_attachments(self, message: Any) -> list[Any]:
+        """Return all image attachments."""
+        images = []
+        for att in message.attachments:
+            ct = (att.content_type or "").lower()
+            fn = (att.filename or "").lower()
+            if ct.startswith("image/") or any(
+                fn.endswith(ext) for ext in IMAGE_EXTENSIONS
+            ):
+                images.append(att)
+        return images
+
+    async def _extract_image_data(self, attachment: Any) -> ImageAttachment:
+        """Download attachment and return as ImageAttachment with base64 data."""
+        fn = (attachment.filename or "image.png").lower()
+        ext = next(
+            (e for e in IMAGE_EXTENSIONS if fn.endswith(e)),
+            ".png",
+        )
+        media_type = IMAGE_MEDIA_TYPES.get(ext, "image/png")
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+
+        try:
+            await attachment.save(str(tmp_path))
+            with open(tmp_path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode("utf-8")
+
+            return ImageAttachment(
+                data=image_data,
+                media_type=media_type,
+                filename=attachment.filename,
+            )
+        finally:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+
     async def _handle_voice_note(
         self, message: Any, attachment: Any, channel_id: str
     ) -> bool:
@@ -308,25 +355,40 @@ class DiscordPlatform(MessagingPlatform):
             else None
         )
 
+        # Extract image attachments
+        image_attachments = self._get_image_attachments(message)
+        images: list[ImageAttachment] = []
+        if image_attachments:
+            for att in image_attachments:
+                try:
+                    img = await self._extract_image_data(att)
+                    images.append(img)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to extract image {}: {}", att.filename, type(e).__name__
+                    )
+
         raw_content = message.content or ""
         if self._log_raw_messaging_content:
             text_preview = raw_content[:80]
             if len(raw_content) > 80:
                 text_preview += "..."
             logger.info(
-                "DISCORD_MSG: chat_id={} message_id={} reply_to={} text_preview={!r}",
+                "DISCORD_MSG: chat_id={} message_id={} reply_to={} text_preview={!r} images={}",
                 channel_id,
                 message_id,
                 reply_to,
                 text_preview,
+                len(images),
             )
         else:
             logger.info(
-                "DISCORD_MSG: chat_id={} message_id={} reply_to={} text_len={}",
+                "DISCORD_MSG: chat_id={} message_id={} reply_to={} text_len={} images={}",
                 channel_id,
                 message_id,
                 reply_to,
                 len(raw_content),
+                len(images),
             )
 
         if not self._message_handler:
@@ -341,6 +403,7 @@ class DiscordPlatform(MessagingPlatform):
             reply_to_message_id=reply_to,
             username=message.author.display_name,
             raw_event=message,
+            images=images,
         )
 
         try:

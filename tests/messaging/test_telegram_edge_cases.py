@@ -287,6 +287,7 @@ async def test_on_telegram_message_non_text_update_ignored():
         update = MagicMock()
         update.message.text = None
         update.message.photo = [MagicMock()]
+        update.message.document = None  # Explicitly no document
         update.message.message_id = 7
         update.message.reply_to_message = None
         update.effective_user.id = 123

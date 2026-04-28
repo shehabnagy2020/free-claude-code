@@ -7,7 +7,9 @@ Uses tree-based queuing for message ordering.
 """
 
 import asyncio
+import json
 
+import httpx
 from loguru import logger
 
 from core.anthropic import format_user_error_preview, get_user_facing_error_message
@@ -159,6 +161,45 @@ class ClaudeMessageHandler:
         if any(text.startswith(p) for p in STATUS_MESSAGE_PREFIXES):
             return
 
+        # Check if this message has images - route directly to API
+        if incoming.has_images():
+            logger.info(
+                "HANDLER: Routing image message to API (images={})",
+                len(incoming.images),
+            )
+            # Send new status message
+            status_text = self.format_status("⏳", "Processing image...")
+            status_msg_id = await self.platform.queue_send_message(
+                incoming.chat_id,
+                status_text,
+                reply_to=incoming.message_id,
+                fire_and_forget=False,
+                message_thread_id=incoming.message_thread_id,
+            )
+            if status_msg_id:
+                self.record_outgoing_message(
+                    incoming.platform, incoming.chat_id, status_msg_id, "status"
+                )
+
+                try:
+                    await self._send_image_message_to_api(incoming, status_msg_id)
+                except Exception as e:
+                    logger.error(
+                        "IMAGE_MSG: Failed to process: {}",
+                        format_exception_for_log(
+                            e, log_full_message=self._log_messaging_error_details
+                        ),
+                    )
+                    await self.platform.queue_edit_message(
+                        incoming.chat_id,
+                        status_msg_id,
+                        self.format_status(
+                            "❌", "Error:", format_user_error_preview(e)
+                        ),
+                        parse_mode=self._parse_mode(),
+                    )
+            return
+
         # Check if this is a reply to an existing node in a tree
         parent_node_id = None
         tree = None
@@ -307,6 +348,192 @@ class ClaudeMessageHandler:
             debug_subagent_stack=self._debug_subagent_stack,
         )
         return transcript, self.get_render_ctx()
+
+    async def _send_image_message_to_api(
+        self,
+        incoming: IncomingMessage,
+        status_msg_id: str,
+    ) -> None:
+        """
+        Send a message with images directly to the proxy API.
+
+        This bypasses the Claude CLI subprocess since images can't be passed
+        via command line arguments. Instead, we make an HTTP POST to the
+        /v1/messages endpoint with the Anthropic-format payload including images.
+        """
+        api_url = self.cli_manager.api_url  # e.g. "http://localhost:8082"
+        if not api_url:
+            raise RuntimeError("API URL not configured for image message")
+
+        # Build Anthropic-format message content
+        content_blocks = []
+        if incoming.text:
+            content_blocks.append({"type": "text", "text": incoming.text})
+
+        # Add image blocks
+        content_blocks.extend(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.media_type,
+                    "data": img.data,
+                },
+            }
+            for img in incoming.images
+        )
+
+        # Determine model based on Claude model mapping (simplified - use sonnet by default)
+        # In production, this should respect the same MODEL_* routing as the API
+        model = "claude-sonnet-4-20250514"
+
+        payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content_blocks,
+                }
+            ],
+            "stream": True,
+        }
+
+        logger.info(
+            "IMAGE_MSG: Sending to API url={} images={} text_len={}",
+            api_url,
+            len(incoming.images),
+            len(incoming.text or ""),
+        )
+
+        # Stream the response
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=10.0)
+        ) as client:
+            headers = {
+                "x-api-key": "freecc",  # Match the proxy's default auth token
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            }
+
+            async with client.stream(
+                "POST",
+                f"{api_url}/v1/messages",
+                json=payload,
+                headers=headers,
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    error_body = error_text.decode()
+                    # Check if error is related to image/vision不支持
+                    if any(
+                        kw in error_body.lower()
+                        for kw in [
+                            "image",
+                            "vision",
+                            "multimodal",
+                            "unsupported",
+                            "not support",
+                        ]
+                    ):
+                        raise RuntimeError(
+                            f"The current model does not support image input. "
+                            f"API Error: {response.status_code} - {error_body[:200]}. "
+                            f"Switch to a vision-capable model (e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o)."
+                        )
+                    raise RuntimeError(
+                        f"API error: {response.status_code} - {error_body}"
+                    )
+
+                # Process SSE stream
+                transcript, render_ctx = self._create_transcript_and_render_ctx()
+                editor = ThrottledTranscriptEditor(
+                    platform=self.platform,
+                    parse_mode=self._parse_mode(),
+                    get_limit_chars=self._get_limit_chars,
+                    transcript=transcript,
+                    render_ctx=render_ctx,
+                    node_id=incoming.message_id,
+                    chat_id=incoming.chat_id,
+                    status_msg_id=status_msg_id,
+                    debug_platform_edits=False,
+                    log_messaging_error_details=self._log_messaging_error_details,
+                )
+
+                async def update_ui(status: str | None = None, force: bool = False):
+                    await editor.update(status, force=force)
+
+                await update_ui(
+                    self.format_status("🔄", "Processing image..."), force=True
+                )
+
+                # Parse SSE stream
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]  # Remove "data: " prefix
+                    if data == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data)
+                        event_type = event.get("type")
+
+                        if event_type == "content_block_start":
+                            block = event.get("content_block", {})
+                            if block.get("type") == "text":
+                                pass  # Text block starting
+                            elif block.get("type") == "tool_use":
+                                pass  # Tool use starting
+
+                        elif event_type == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text = delta.get("text", "")
+                                transcript.apply(
+                                    {"type": "assistant_text_delta", "text": text}
+                                )
+                                await update_ui()
+
+                        elif event_type == "message_delta":
+                            usage = event.get("usage", {})
+                            if usage:
+                                logger.debug(
+                                    "IMAGE_MSG: Output tokens={}",
+                                    usage.get("output_tokens", 0),
+                                )
+
+                        elif event_type == "error":
+                            error_msg = event.get("error", {}).get(
+                                "message", "Unknown error"
+                            )
+                            # Enhance error message if it's about image不支持
+                            if any(
+                                kw in error_msg.lower()
+                                for kw in [
+                                    "image",
+                                    "vision",
+                                    "multimodal",
+                                    "unsupported",
+                                    "not support",
+                                ]
+                            ):
+                                error_msg = (
+                                    f"{error_msg} "
+                                    f"The current model does not support image input. "
+                                    f"Use a vision-capable model (e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o)."
+                                )
+                            transcript.apply({"type": "error", "message": error_msg})
+                            await update_ui(
+                                self.format_status("❌", "Error"), force=True
+                            )
+
+                    except json.JSONDecodeError:
+                        continue
+
+                # Final update
+                await update_ui(force=True)
+
+        logger.info("IMAGE_MSG: Completed processing for node {}", incoming.message_id)
 
     async def _process_node(
         self,

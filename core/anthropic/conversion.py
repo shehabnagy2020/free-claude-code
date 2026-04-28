@@ -432,11 +432,47 @@ class AnthropicToOpenAIConverter:
             if block_type == "text":
                 text_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "image":
-                raise OpenAIConversionError(
-                    "User message image blocks are not supported for OpenAI chat "
-                    "conversion; use a vision-capable native Anthropic provider or "
-                    "extend the converter."
-                )
+                flush_text()
+                # Convert Anthropic image to OpenAI image_url format
+                source = get_block_attr(block, "source", {})
+                if isinstance(source, dict):
+                    source_type = source.get("type", "")
+                    if source_type == "base64":
+                        media_type = source.get("media_type", "image/png")
+                        data = source.get("data", "")
+                        image_url = f"data:{media_type};base64,{data}"
+                        result.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": image_url},
+                                    }
+                                ],
+                            }
+                        )
+                    elif source_type == "url":
+                        image_url = source.get("url", "")
+                        result.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": image_url},
+                                    }
+                                ],
+                            }
+                        )
+                    else:
+                        raise OpenAIConversionError(
+                            f"Unsupported image source type: {source_type}"
+                        )
+                else:
+                    raise OpenAIConversionError(
+                        "Image source must be a dict with type, media_type, and data/url"
+                    )
             elif block_type == "tool_result":
                 flush_text()
                 tool_content = get_block_attr(block, "content", "")
@@ -482,11 +518,47 @@ class AnthropicToOpenAIConverter:
             if block_type == "text":
                 text_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "image":
-                raise OpenAIConversionError(
-                    "User message image blocks are not supported for OpenAI chat "
-                    "conversion; use a vision-capable native Anthropic provider or "
-                    "extend the converter."
-                )
+                flush_text()
+                # Convert Anthropic image to OpenAI image_url format
+                source = get_block_attr(block, "source", {})
+                if isinstance(source, dict):
+                    source_type = source.get("type", "")
+                    if source_type == "base64":
+                        media_type = source.get("media_type", "image/png")
+                        data = source.get("data", "")
+                        image_url = f"data:{media_type};base64,{data}"
+                        result.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": image_url},
+                                    }
+                                ],
+                            }
+                        )
+                    elif source_type == "url":
+                        image_url = source.get("url", "")
+                        result.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": image_url},
+                                    }
+                                ],
+                            }
+                        )
+                    else:
+                        raise OpenAIConversionError(
+                            f"Unsupported image source type: {source_type}"
+                        )
+                else:
+                    raise OpenAIConversionError(
+                        "Image source must be a dict with type, media_type, and data/url"
+                    )
             elif block_type == "tool_result":
                 flush_text()
                 tool_content = get_block_attr(block, "content", "")
