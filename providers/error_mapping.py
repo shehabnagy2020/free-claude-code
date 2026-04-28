@@ -60,17 +60,22 @@ def map_error(
 
     if isinstance(e, httpx.HTTPStatusError):
         status = e.response.status_code
+        # Try to extract error body for image/content-policy detection
+        try:
+            error_body = e.response.text
+        except Exception:
+            error_body = str(e)
         if status in (401, 403):
-            return AuthenticationError(message, raw_error=str(e))
+            return AuthenticationError(message, raw_error=error_body)
         if status == 429:
             limiter.set_blocked(60)
-            return RateLimitError(message, raw_error=str(e))
+            return RateLimitError(message, raw_error=error_body)
         if status == 400:
-            return InvalidRequestError(message, raw_error=str(e))
+            return InvalidRequestError(message, raw_error=error_body)
         if status >= 500:
             if status in (502, 503, 504):
-                return OverloadedError(message, raw_error=str(e))
-            return APIError(message, status_code=status, raw_error=str(e))
-        return APIError(message, status_code=status, raw_error=str(e))
+                return OverloadedError(message, raw_error=error_body)
+            return APIError(message, status_code=status, raw_error=error_body)
+        return APIError(message, status_code=status, raw_error=error_body)
 
     return e
