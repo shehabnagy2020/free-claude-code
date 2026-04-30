@@ -283,8 +283,12 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         try:
             async for chunk in provider_iter:
                 yield chunk
-                if chunk.startswith("data:"):
-                    data_str = chunk[5:].strip()
+                # Chunks are multi-line SSE: "event: ...\ndata: {...}\n\n"
+                # Find the data line within the chunk.
+                for line in chunk.splitlines():
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
                     try:
                         evt = json.loads(data_str)
                         if evt.get("type") == "content_block_delta":

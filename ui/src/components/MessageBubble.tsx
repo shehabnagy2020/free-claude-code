@@ -140,7 +140,7 @@ export default function MessageBubble({ message, models, onResend }: Props) {
         )}
         <div className="flex flex-col items-end gap-1 min-w-0 max-w-[80%]">
           <div className="flex items-end gap-2 min-w-0 w-full">
-            <div className="rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white shadow-md shadow-blue-900/20">
+            <div className="rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white shadow-md shadow-blue-900/20 break-words overflow-hidden">
               {images.length > 0 && (
                 <div className="mb-2 flex flex-wrap gap-1.5">
                   {images.map((src, i) => (
@@ -266,22 +266,22 @@ export default function MessageBubble({ message, models, onResend }: Props) {
                         <CopyButton text={code} />
                       </div>
                       <div className="overflow-x-hidden">
-                      <SyntaxHighlighter
-                        style={vscDarkPlus}
-                        language={match[1]}
-                        PreTag="div"
-                        customStyle={{
-                          margin: 0,
-                          background: "transparent",
-                          padding: "12px 14px",
-                          fontSize: "0.8125rem",
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-all",
-                        }}
-                        {...props}
-                      >
-                        {code}
-                      </SyntaxHighlighter>
+                        <SyntaxHighlighter
+                          style={vscDarkPlus}
+                          language={match[1]}
+                          PreTag="div"
+                          customStyle={{
+                            margin: 0,
+                            background: "transparent",
+                            padding: "12px 14px",
+                            fontSize: "0.8125rem",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-all",
+                          }}
+                          {...props}
+                        >
+                          {code}
+                        </SyntaxHighlighter>
                       </div>
                     </div>
                   );
