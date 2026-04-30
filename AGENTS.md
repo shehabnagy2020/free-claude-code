@@ -67,6 +67,19 @@
 
 - Prefer built-in tools (grep, read_file, etc.) over manual workflows. Check tool availability before use.
 
+## WEB UI (`ui/`)
+
+- Built with React + Vite + Tailwind. Source in `ui/src/`, built output in `ui/dist/` (served statically by FastAPI).
+- **Always rebuild after editing UI source**: run `cd ui && npx vite build` on the deployment machine (Pi). PM2's `fcc-ui` process runs `vite build --watch` for auto-rebuild on that machine.
+- **Streaming chat flow** (`api/ui_routes.py` → `ui/src/App.tsx`):
+  1. Backend saves user message and **sets session title** (first turn only, `if not history`) _before_ the stream starts — no race.
+  2. Frontend updates session title **optimistically in local state** the moment the user sends (no waiting for network).
+  3. Frontend shows streamed text via `StreamingBubble`; on `onDone` it appends an optimistic `Message` immediately, clears streaming state, then background-syncs with DB (retries at 100/300/600 ms until last message has `role=="assistant"`).
+  4. `loadSessions()` is called once after the DB sync confirms the assistant message is persisted.
+- **No fixed-delay polling for titles**: title is set server-side before the HTTP response body starts, and mirrored client-side optimistically — never poll for it.
+- **Race-free DB sync**: `onDone` never clears streaming state before the canonical messages are fetched; optimistic message prevents blank-screen flash.
+- **`ui/src/lib/api.ts`**: all HTTP calls. `streamChat` returns an `AbortController`; retries connection errors up to 2× with exponential backoff.
+
 ## IMAGE SUPPORT
 
 - Discord and Telegram platforms support image attachments (PNG, JPEG, GIF, WebP)
