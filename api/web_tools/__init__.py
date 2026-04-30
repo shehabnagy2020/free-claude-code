@@ -5,14 +5,22 @@ from .egress import (
     WebFetchEgressViolation,
     enforce_web_fetch_egress,
 )
-from .request import is_web_server_tool_request, strip_server_tools
-from .streaming import stream_web_server_tool_response
+from .request import (
+    convert_server_tools_to_regular,
+    has_listed_anthropic_server_tools,
+    is_web_server_tool_request,
+    strip_server_tools,
+)
+from .streaming import stream_web_server_tool_response, stream_with_web_tool_interception
 
 __all__ = [
     "WebFetchEgressPolicy",
     "WebFetchEgressViolation",
+    "convert_server_tools_to_regular",
     "enforce_web_fetch_egress",
+    "has_listed_anthropic_server_tools",
     "is_web_server_tool_request",
-    "strip_server_tools",
     "stream_web_server_tool_response",
+    "stream_with_web_tool_interception",
+    "strip_server_tools",
 ]

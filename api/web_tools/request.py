@@ -1,8 +1,37 @@
-"""Detect forced Anthropic web server tool requests."""
+"""Detect and convert Anthropic web server tool requests."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from api.models.anthropic import MessagesRequest, Tool
+
+# Input schemas for converting server tools to regular tools.
+_WEB_SEARCH_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "The search query to look up on the web",
+        },
+    },
+    "required": ["query"],
+}
+
+_WEB_FETCH_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": "The URL to fetch content from",
+        },
+    },
+    "required": ["url"],
+}
+
+_SERVER_TOOL_BLOCK_TYPES = frozenset(
+    {"server_tool_use", "web_search_tool_result", "web_fetch_tool_result"}
+)
 
 
 def request_text(request: MessagesRequest) -> str:
@@ -96,13 +125,134 @@ def strip_server_tools(request: MessagesRequest) -> MessagesRequest:
     return MessagesRequest(**data)
 
 
+def _server_tool_to_regular(tool: Tool) -> Tool:
+    """Convert a single server tool definition to a regular tool definition."""
+    name = (tool.name or "").strip()
+    typ = tool.type or ""
+    if name == "web_search" or (isinstance(typ, str) and typ.startswith("web_search")):
+        return Tool(
+            name="web_search",
+            description="Search the web for current information. Returns titles, URLs, and snippets.",
+            input_schema=_WEB_SEARCH_INPUT_SCHEMA,
+        )
+    if name == "web_fetch" or (isinstance(typ, str) and typ.startswith("web_fetch")):
+        return Tool(
+            name="web_fetch",
+            description="Fetch and extract content from a web URL.",
+            input_schema=_WEB_FETCH_INPUT_SCHEMA,
+        )
+    return tool
+
+
+def convert_server_tools_to_regular(request: MessagesRequest) -> MessagesRequest:
+    """Convert server tool definitions to regular tool definitions with input_schema.
+
+    Also sanitizes message history to replace ``server_tool_use`` and
+    ``web_search_tool_result`` / ``web_fetch_tool_result`` blocks with
+    provider-compatible equivalents (``tool_use`` / ``text``).
+    """
+    tools = request.tools or []
+    has_server_tools = any(is_anthropic_server_tool_definition(t) for t in tools)
+    messages_dirty = _messages_contain_server_tool_blocks(request.messages)
+
+    if not has_server_tools and not messages_dirty:
+        return request
+
+    data = request.model_dump()
+
+    if has_server_tools:
+        new_tools = [_server_tool_to_regular(t) for t in tools]
+        data["tools"] = [t.model_dump() for t in new_tools]
+
+    if messages_dirty:
+        data["messages"] = [
+            _sanitize_message_blocks(msg) for msg in data["messages"]
+        ]
+
+    return MessagesRequest(**data)
+
+
+def _messages_contain_server_tool_blocks(messages: list[Any]) -> bool:
+    """Check whether any message contains server_tool_use or result blocks."""
+    for msg in messages:
+        content = getattr(msg, "content", None)
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            block_type = _block_type(block)
+            if block_type in _SERVER_TOOL_BLOCK_TYPES:
+                return True
+    return False
+
+
+def _block_type(block: Any) -> str:
+    if isinstance(block, dict):
+        return str(block.get("type", ""))
+    return str(getattr(block, "type", ""))
+
+
+def _sanitize_message_blocks(message: dict[str, Any]) -> dict[str, Any]:
+    """Replace server tool blocks with provider-compatible equivalents."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return message
+
+    new_content: list[Any] = []
+    for block in content:
+        bt = _block_type(block)
+        if bt == "server_tool_use":
+            # Convert to regular tool_use.
+            new_content.append({
+                "type": "tool_use",
+                "id": block.get("id", ""),
+                "name": block.get("name", ""),
+                "input": block.get("input", {}),
+            })
+        elif bt in ("web_search_tool_result", "web_fetch_tool_result"):
+            # Convert to a text block summarising the result.
+            result_content = block.get("content", "")
+            summary = _summarise_tool_result(bt, result_content)
+            new_content.append({"type": "text", "text": summary})
+        else:
+            new_content.append(block)
+
+    return {**message, "content": new_content}
+
+
+def _summarise_tool_result(block_type: str, content: Any) -> str:
+    """Create a plain-text summary of a web_search/web_fetch result block."""
+    if isinstance(content, list):
+        # web_search_tool_result: list of {type, title, url, ...}
+        parts = ["[Web search results]"]
+        for item in content:
+            if isinstance(item, dict):
+                title = item.get("title", "")
+                url = item.get("url", "")
+                if title or url:
+                    parts.append(f"- {title}: {url}")
+        return "\n".join(parts) if len(parts) > 1 else "[Web search completed]"
+    if isinstance(content, dict):
+        # web_fetch_tool_result
+        data = content.get("content", {})
+        if isinstance(data, dict):
+            source = data.get("source", {})
+            if isinstance(source, dict):
+                text = source.get("data", "")
+                if text:
+                    return f"[Fetched content]\n{text[:2000]}"
+        return "[Web fetch completed]"
+    return "[Web tool result]"
+
+
 def openai_chat_upstream_server_tool_error(
     request: MessagesRequest, *, web_tools_enabled: bool
 ) -> str | None:
     """Return a user-facing error when OpenAI Chat upstream cannot satisfy server-tool semantics.
 
-    Only errors when tool_choice *forces* a server tool but web tools are disabled.
-    Listed-but-not-forced server tools are silently stripped by strip_server_tools().
+    Errors when:
+    - ``tool_choice`` *forces* a server tool but web tools are disabled.
+    - Server tools are *listed* (even without forced tool_choice) but web tools
+      are disabled — OpenAI Chat upstreams cannot handle Anthropic server tools.
     """
     forced = forced_server_tool_name(request)
     if forced and not web_tools_enabled:
@@ -110,5 +260,10 @@ def openai_chat_upstream_server_tool_error(
             f"tool_choice forces Anthropic server tool {forced!r}, but local web server tools are "
             "disabled (ENABLE_WEB_SERVER_TOOLS=false). "
             "Set TAVILY_MCP_URL and ENABLE_WEB_SERVER_TOOLS=true in your .env to enable them."
+        )
+    if has_listed_anthropic_server_tools(request) and not web_tools_enabled:
+        return (
+            "OpenAI Chat upstreams cannot handle Anthropic server tools (web_search / web_fetch). "
+            "Set TAVILY_API_KEY and ENABLE_WEB_SERVER_TOOLS=true in your .env to enable them."
         )
     return None

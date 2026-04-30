@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
+
+from loguru import logger
 
 from api.models.anthropic import MessagesRequest
 from core.anthropic.server_tool_sse import (
@@ -27,6 +30,8 @@ from .request import (
     forced_tool_turn_text,
     has_tool_named,
 )
+
+_WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
 
 
 def _search_summary(query: str, results: list[dict[str, str]]) -> str:
@@ -218,3 +223,292 @@ async def stream_web_server_tool_response(
         },
     )
     yield format_sse_event("message_stop", {"type": "message_stop"})
+
+
+# ---------------------------------------------------------------------------
+# SSE parsing helper
+# ---------------------------------------------------------------------------
+
+def _parse_sse_event_string(sse_string: str) -> tuple[str, dict[str, Any]]:
+    """Parse a formatted SSE event string into (event_type, data_dict)."""
+    event_type = ""
+    data_text = ""
+    for line in sse_string.strip().split("\n"):
+        if line.startswith("event:"):
+            event_type = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_text = line.split(":", 1)[1].strip()
+    if data_text:
+        try:
+            data = json.loads(data_text)
+            return event_type, data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            return event_type, {}
+    return event_type, {}
+
+
+# ---------------------------------------------------------------------------
+# Tavily execution helper
+# ---------------------------------------------------------------------------
+
+async def _execute_tavily_tool(
+    tool_name: str,
+    tool_input: dict[str, Any],
+    *,
+    tavily_api_key: str,
+    verbose_client_errors: bool = False,
+) -> tuple[Any, str, str]:
+    """Execute web_search or web_fetch via Tavily.
+
+    Returns ``(result_content, summary_text, result_block_type)``.
+    """
+    try:
+        if tool_name == "web_search":
+            query = str(tool_input.get("query", ""))
+            if not tavily_api_key:
+                raise RuntimeError(
+                    "TAVILY_API_KEY is not configured. Set it in your .env to enable web search."
+                )
+            results = await _tavily.tavily_search(tavily_api_key, query)
+            result_content: Any = [
+                {
+                    "type": "web_search_result",
+                    "title": result["title"],
+                    "url": result["url"],
+                }
+                for result in results
+            ]
+            summary = _search_summary(query, results)
+            return result_content, summary, WEB_SEARCH_TOOL_RESULT
+        else:
+            url = str(tool_input.get("url", ""))
+            if not tavily_api_key:
+                raise RuntimeError(
+                    "TAVILY_API_KEY is not configured. Set it in your .env to enable web fetch."
+                )
+            fetched = await _tavily.tavily_fetch(tavily_api_key, url)
+            result_content = {
+                "type": "web_fetch_result",
+                "url": fetched["url"],
+                "content": {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": fetched["media_type"],
+                        "data": fetched["data"],
+                    },
+                    "title": fetched["title"],
+                    "citations": {"enabled": True},
+                },
+                "retrieved_at": datetime.now(UTC).isoformat(),
+            }
+            summary = fetched["data"][:_MAX_FETCH_CHARS]
+            return result_content, summary, WEB_FETCH_TOOL_RESULT
+    except Exception as error:
+        fetch_url = str(tool_input.get("url", "")) if tool_name == "web_fetch" else None
+        outbound._log_web_tool_failure(tool_name, error, fetch_url=fetch_url)
+        _error_types = {
+            "web_search": WEB_SEARCH_TOOL_RESULT_ERROR,
+            "web_fetch": WEB_FETCH_TOOL_ERROR,
+        }
+        _result_types = {
+            "web_search": WEB_SEARCH_TOOL_RESULT,
+            "web_fetch": WEB_FETCH_TOOL_RESULT,
+        }
+        result_content = {
+            "type": _error_types[tool_name],
+            "error_code": "unavailable",
+        }
+        summary = outbound._web_tool_client_error_summary(
+            tool_name, error, verbose=verbose_client_errors
+        )
+        return result_content, summary, _result_types[tool_name]
+
+
+# ---------------------------------------------------------------------------
+# Stream interception: intercept model tool_use for web_search/web_fetch
+# ---------------------------------------------------------------------------
+
+async def stream_with_web_tool_interception(
+    provider_stream: AsyncIterator[str],
+    *,
+    tavily_api_key: str = "",
+    verbose_client_errors: bool = False,
+) -> AsyncIterator[str]:
+    """Wrap a provider SSE stream to intercept web_search/web_fetch tool_use calls.
+
+    When the model generates a ``tool_use`` for ``web_search`` or ``web_fetch``,
+    this function:
+
+    1. Suppresses the original ``tool_use`` content block events.
+    2. Executes the search / fetch via *Tavily*.
+    3. Emits ``server_tool_use`` + ``web_search_tool_result`` (or
+       ``web_fetch_tool_result``) + a text summary block in their place.
+    4. Changes ``stop_reason`` from ``tool_use`` to ``end_turn``.
+
+    Non-web-tool ``tool_use`` blocks and all other events pass through unchanged
+    (with index adjustment when interception adds extra blocks).
+    """
+    # ---- state ----
+    intercepting_index: int = -1       # block index currently being intercepted
+    intercepting_tool_name: str = ""
+    input_json_parts: list[str] = []
+    index_offset: int = 0              # cumulative extra blocks inserted
+    did_intercept: bool = False        # whether any tool_use was intercepted
+
+    async for raw_event in provider_stream:
+        event_type, data = _parse_sse_event_string(raw_event)
+
+        # -- content_block_start -----------------------------------------
+        if event_type == "content_block_start":
+            block = data.get("content_block", {})
+            if not isinstance(block, dict):
+                yield raw_event
+                continue
+
+            block_type = block.get("type", "")
+            block_name = block.get("name", "")
+            original_index: int = data.get("index", 0)
+
+            if block_type == "tool_use" and block_name in _WEB_TOOL_NAMES:
+                intercepting_index = original_index
+                intercepting_tool_name = block_name
+                input_json_parts = []
+                continue  # suppress
+
+            if index_offset:
+                data["index"] = original_index + index_offset
+                yield format_sse_event(event_type, data)
+            else:
+                yield raw_event
+            continue
+
+        # -- content_block_delta -----------------------------------------
+        if event_type == "content_block_delta":
+            ev_index: int = data.get("index", -1)
+
+            if ev_index == intercepting_index and intercepting_index >= 0:
+                delta = data.get("delta", {})
+                if isinstance(delta, dict) and delta.get("type") == "input_json_delta":
+                    input_json_parts.append(str(delta.get("partial_json", "")))
+                continue  # suppress
+
+            if index_offset:
+                data["index"] = ev_index + index_offset
+                yield format_sse_event(event_type, data)
+            else:
+                yield raw_event
+            continue
+
+        # -- content_block_stop ------------------------------------------
+        if event_type == "content_block_stop":
+            ev_index = data.get("index", -1)
+
+            if ev_index == intercepting_index and intercepting_index >= 0:
+                # Assemble the full tool input from buffered JSON deltas.
+                full_json_str = "".join(input_json_parts)
+                tool_input: dict[str, Any] = (
+                    json.loads(full_json_str) if full_json_str.strip() else {}
+                )
+                srv_tool_id = f"srvtoolu_{uuid.uuid4().hex}"
+                adj = intercepting_index + index_offset
+
+                logger.info(
+                    "web_tool_intercept: name={} input={!r}",
+                    intercepting_tool_name,
+                    tool_input,
+                )
+
+                # Block A: server_tool_use
+                yield format_sse_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": adj,
+                        "content_block": {
+                            "type": SERVER_TOOL_USE,
+                            "id": srv_tool_id,
+                            "name": intercepting_tool_name,
+                            "input": tool_input,
+                        },
+                    },
+                )
+                yield format_sse_event(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": adj},
+                )
+
+                # Execute Tavily
+                result_content, summary, result_block_type = (
+                    await _execute_tavily_tool(
+                        intercepting_tool_name,
+                        tool_input,
+                        tavily_api_key=tavily_api_key,
+                        verbose_client_errors=verbose_client_errors,
+                    )
+                )
+
+                # Block B: web_search_tool_result / web_fetch_tool_result
+                yield format_sse_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": adj + 1,
+                        "content_block": {
+                            "type": result_block_type,
+                            "tool_use_id": srv_tool_id,
+                            "content": result_content,
+                        },
+                    },
+                )
+                yield format_sse_event(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": adj + 1},
+                )
+
+                # Block C: text summary
+                yield format_sse_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": adj + 2,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
+                yield format_sse_event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": adj + 2,
+                        "delta": {"type": "text_delta", "text": summary},
+                    },
+                )
+                yield format_sse_event(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": adj + 2},
+                )
+
+                # 1 original block → 3 emitted blocks  ⇒  offset +2
+                index_offset += 2
+                intercepting_index = -1
+                did_intercept = True
+                continue
+
+            if index_offset:
+                data["index"] = ev_index + index_offset
+                yield format_sse_event(event_type, data)
+            else:
+                yield raw_event
+            continue
+
+        # -- message_delta -----------------------------------------------
+        if event_type == "message_delta" and did_intercept:
+            delta = data.get("delta", {})
+            if isinstance(delta, dict) and delta.get("stop_reason") == "tool_use":
+                delta["stop_reason"] = "end_turn"
+                data["delta"] = delta
+                yield format_sse_event(event_type, data)
+                continue
+
+        # -- everything else passes through ------------------------------
+        yield raw_event

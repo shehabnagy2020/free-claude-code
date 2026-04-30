@@ -299,11 +299,11 @@ async def test_run_web_fetch_excess_redirects_raises():
 
 @pytest.mark.asyncio
 async def test_streams_web_search_server_tool_result(monkeypatch):
-    async def fake_search(query: str) -> list[dict[str, str]]:
+    async def fake_search(_api_key: str, query: str) -> list[dict[str, str]]:
         assert query == "DeepSeek V4 model release 2026"
         return [{"title": "DeepSeek V4 Released", "url": "https://example.com/v4"}]
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_search", fake_search)
+    monkeypatch.setattr("api.web_tools.tavily.tavily_search", fake_search)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -323,7 +323,10 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
         [
             event
             async for event in stream_web_server_tool_response(
-                request, input_tokens=42, web_fetch_egress=_STRICT_EGRESS
+                request,
+                input_tokens=42,
+                web_fetch_egress=_STRICT_EGRESS,
+                tavily_api_key="tvly-test",
             )
         ]
     )
@@ -363,7 +366,7 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
     """Only the latest user message supplies the URL (not earlier transcript text)."""
     target = "https://new-only.example.com/page"
 
-    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def fake_fetch(_api_key: str, url: str) -> dict[str, str]:
         assert url == target
         return {
             "url": url,
@@ -372,7 +375,7 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
             "data": "x",
         }
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", fake_fetch)
+    monkeypatch.setattr("api.web_tools.tavily.tavily_fetch", fake_fetch)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -395,7 +398,10 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
         [
             event
             async for event in stream_web_server_tool_response(
-                request, input_tokens=1, web_fetch_egress=_STRICT_EGRESS
+                request,
+                input_tokens=1,
+                web_fetch_egress=_STRICT_EGRESS,
+                tavily_api_key="tvly-test",
             )
         ]
     )
@@ -404,7 +410,7 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
 
 @pytest.mark.asyncio
 async def test_streams_web_fetch_server_tool_result(monkeypatch):
-    async def fake_fetch(url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def fake_fetch(_api_key: str, url: str) -> dict[str, str]:
         assert url == "https://example.com/article"
         return {
             "url": url,
@@ -413,7 +419,7 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
             "data": "Article body",
         }
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", fake_fetch)
+    monkeypatch.setattr("api.web_tools.tavily.tavily_fetch", fake_fetch)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -428,7 +434,10 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
         [
             event
             async for event in stream_web_server_tool_response(
-                request, input_tokens=42, web_fetch_egress=_STRICT_EGRESS
+                request,
+                input_tokens=42,
+                web_fetch_egress=_STRICT_EGRESS,
+                tavily_api_key="tvly-test",
             )
         ]
     )
@@ -464,10 +473,10 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
 async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
     secret = "sensitive-upstream-token"
 
-    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def boom(_api_key: str, _url: str) -> dict[str, str]:
         raise ValueError(secret)
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", boom)
+    monkeypatch.setattr("api.web_tools.tavily.tavily_fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -490,6 +499,7 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
                     input_tokens=1,
                     web_fetch_egress=_STRICT_EGRESS,
                     verbose_client_errors=False,
+                    tavily_api_key="tvly-test",
                 )
             ]
         )
@@ -522,10 +532,10 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
 async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
     monkeypatch,
 ):
-    async def boom(_url: str, _egress: WebFetchEgressPolicy) -> dict[str, str]:
+    async def boom(_api_key: str, _url: str) -> dict[str, str]:
         raise OSError(5, "oops")
 
-    monkeypatch.setattr("api.web_tools.outbound._run_web_fetch", boom)
+    monkeypatch.setattr("api.web_tools.tavily.tavily_fetch", boom)
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -542,6 +552,7 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
                 input_tokens=1,
                 web_fetch_egress=_STRICT_EGRESS,
                 verbose_client_errors=True,
+                tavily_api_key="tvly-test",
             )
         ]
     )
@@ -619,3 +630,342 @@ def test_listed_server_tools_routed_on_open_router() -> None:
     )
     service.create_message(request)
     mock_provider.preflight_stream.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# convert_server_tools_to_regular
+# ---------------------------------------------------------------------------
+
+
+def test_convert_server_tools_to_regular_converts_web_search():
+    from api.web_tools.request import convert_server_tools_to_regular
+
+    request = MessagesRequest(
+        model="m",
+        max_tokens=20,
+        messages=[Message(role="user", content="q")],
+        tools=[
+            Tool(name="web_search", type="web_search_20250305"),
+            Tool(
+                name="bash",
+                description="Run bash",
+                input_schema={"type": "object", "properties": {}},
+            ),
+        ],
+    )
+    converted = convert_server_tools_to_regular(request)
+    assert converted.tools is not None
+    assert len(converted.tools) == 2
+    ws = converted.tools[0]
+    assert ws.name == "web_search"
+    assert ws.type is None  # no longer a server tool type
+    assert ws.input_schema is not None
+    assert "query" in ws.input_schema.get("properties", {})
+    # non-server tool unchanged
+    assert converted.tools[1].name == "bash"
+
+
+def test_convert_server_tools_to_regular_converts_web_fetch():
+    from api.web_tools.request import convert_server_tools_to_regular
+
+    request = MessagesRequest(
+        model="m",
+        max_tokens=20,
+        messages=[Message(role="user", content="q")],
+        tools=[Tool(name="web_fetch", type="web_fetch_20250910")],
+    )
+    converted = convert_server_tools_to_regular(request)
+    assert converted.tools is not None
+    wf = converted.tools[0]
+    assert wf.name == "web_fetch"
+    assert wf.input_schema is not None
+    assert "url" in wf.input_schema.get("properties", {})
+
+
+def test_convert_server_tools_sanitises_message_history():
+    from api.web_tools.request import convert_server_tools_to_regular
+
+    request = MessagesRequest(
+        model="m",
+        max_tokens=20,
+        messages=[
+            Message(role="user", content="search for X"),
+            Message(
+                role="assistant",
+                content=[
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_123",
+                        "name": "web_search",
+                        "input": {"query": "X"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_123",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "title": "Result",
+                                "url": "https://example.com",
+                            }
+                        ],
+                    },
+                    {"type": "text", "text": "Here are the results."},
+                ],
+            ),
+            Message(role="user", content="thanks"),
+        ],
+        tools=[Tool(name="web_search", type="web_search_20250305")],
+    )
+    converted = convert_server_tools_to_regular(request)
+    # assistant message should have tool_use instead of server_tool_use
+    assistant_msg = converted.messages[1]
+    blocks = assistant_msg.content
+    assert isinstance(blocks, list)
+    assert blocks[0]["type"] == "tool_use"
+    assert blocks[0]["name"] == "web_search"
+    # web_search_tool_result → text block
+    assert blocks[1]["type"] == "text"
+    assert "Result" in blocks[1]["text"]
+    # original text block unchanged
+    assert blocks[2]["type"] == "text"
+
+
+# ---------------------------------------------------------------------------
+# stream_with_web_tool_interception
+# ---------------------------------------------------------------------------
+
+
+def _build_provider_sse_stream(
+    *tool_calls: tuple[str, dict],
+    text_before: str = "",
+) -> list[str]:
+    """Build a minimal SSE stream from a provider that may include tool_use blocks."""
+    import json
+
+    events: list[str] = []
+    events.append(
+        f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "model": "m", "stop_reason": None, "usage": {"input_tokens": 10, "output_tokens": 1}}})}\n\n'
+    )
+    idx = 0
+    if text_before:
+        events.append(
+            f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": idx, "content_block": {"type": "text", "text": ""}})}\n\n'
+        )
+        events.append(
+            f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": idx, "delta": {"type": "text_delta", "text": text_before}})}\n\n'
+        )
+        events.append(
+            f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": idx})}\n\n'
+        )
+        idx += 1
+
+    has_tool_use = len(tool_calls) > 0
+    for tool_name, tool_input in tool_calls:
+        tool_id = f"toolu_{idx}"
+        events.append(
+            f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": idx, "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name, "input": {}}})}\n\n'
+        )
+        events.append(
+            f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": idx, "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_input)}})}\n\n'
+        )
+        events.append(
+            f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": idx})}\n\n'
+        )
+        idx += 1
+
+    stop_reason = "tool_use" if has_tool_use else "end_turn"
+    events.append(
+        f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 10}})}\n\n'
+    )
+    events.append(
+        f'event: message_stop\ndata: {json.dumps({"type": "message_stop"})}\n\n'
+    )
+    return events
+
+
+@pytest.mark.asyncio
+async def test_interception_converts_web_search_to_server_tool_use(monkeypatch):
+    from api.web_tools.streaming import stream_with_web_tool_interception
+
+    async def fake_search(_api_key: str, query: str) -> list[dict[str, str]]:
+        return [{"title": "Weather Cairo", "url": "https://weather.com/cairo", "snippet": "Sunny 35C"}]
+
+    monkeypatch.setattr("api.web_tools.tavily.tavily_search", fake_search)
+
+    provider_events = _build_provider_sse_stream(
+        ("web_search", {"query": "Cairo weather"}),
+    )
+
+    async def fake_provider_stream():
+        for ev in provider_events:
+            yield ev
+
+    raw = "".join(
+        [
+            event
+            async for event in stream_with_web_tool_interception(
+                fake_provider_stream(),
+                tavily_api_key="tvly-test",
+            )
+        ]
+    )
+    events = parse_sse_text(raw)
+    assert_anthropic_stream_contract(events)
+
+    starts = [e for e in events if e.event == "content_block_start"]
+    # Should be: server_tool_use, web_search_tool_result, text
+    assert len(starts) == 3
+    assert starts[0].data["content_block"]["type"] == "server_tool_use"
+    assert starts[0].data["content_block"]["name"] == "web_search"
+    assert starts[0].data["content_block"]["input"] == {"query": "Cairo weather"}
+    assert starts[1].data["content_block"]["type"] == "web_search_tool_result"
+    assert starts[1].data["content_block"]["content"][0]["url"] == "https://weather.com/cairo"
+    assert starts[2].data["content_block"]["type"] == "text"
+
+    # stop_reason should be end_turn (not tool_use)
+    deltas = [e for e in events if e.event == "message_delta"]
+    assert deltas[-1].data["delta"]["stop_reason"] == "end_turn"
+
+    # Summary text should mention weather
+    assert "weather.com" in text_content(events).lower()
+
+
+@pytest.mark.asyncio
+async def test_interception_passes_through_non_web_search_tool_use():
+    """tool_use for non-web tools should pass through unchanged."""
+    from api.web_tools.streaming import stream_with_web_tool_interception
+
+    provider_events = _build_provider_sse_stream(
+        ("bash", {"command": "ls"}),
+    )
+
+    async def fake_provider_stream():
+        for ev in provider_events:
+            yield ev
+
+    raw = "".join(
+        [
+            event
+            async for event in stream_with_web_tool_interception(
+                fake_provider_stream(),
+                tavily_api_key="tvly-test",
+            )
+        ]
+    )
+    events = parse_sse_text(raw)
+
+    starts = [e for e in events if e.event == "content_block_start"]
+    assert len(starts) == 1
+    assert starts[0].data["content_block"]["type"] == "tool_use"
+    assert starts[0].data["content_block"]["name"] == "bash"
+
+    # stop_reason should remain tool_use
+    deltas = [e for e in events if e.event == "message_delta"]
+    assert deltas[-1].data["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_interception_with_text_before_web_search(monkeypatch):
+    """Text blocks before web_search should pass through, then web_search is intercepted."""
+    from api.web_tools.streaming import stream_with_web_tool_interception
+
+    async def fake_search(_api_key: str, query: str) -> list[dict[str, str]]:
+        return [{"title": "Result", "url": "https://example.com", "snippet": "content"}]
+
+    monkeypatch.setattr("api.web_tools.tavily.tavily_search", fake_search)
+
+    provider_events = _build_provider_sse_stream(
+        ("web_search", {"query": "test"}),
+        text_before="I'll search for that.",
+    )
+
+    async def fake_provider_stream():
+        for ev in provider_events:
+            yield ev
+
+    raw = "".join(
+        [
+            event
+            async for event in stream_with_web_tool_interception(
+                fake_provider_stream(),
+                tavily_api_key="tvly-test",
+            )
+        ]
+    )
+    events = parse_sse_text(raw)
+    assert_anthropic_stream_contract(events)
+
+    starts = [e for e in events if e.event == "content_block_start"]
+    # text + server_tool_use + web_search_tool_result + summary text = 4
+    assert len(starts) == 4
+    assert starts[0].data["content_block"]["type"] == "text"
+    assert starts[1].data["content_block"]["type"] == "server_tool_use"
+    assert starts[2].data["content_block"]["type"] == "web_search_tool_result"
+    assert starts[3].data["content_block"]["type"] == "text"
+
+    # Verify pre-search text is included
+    assert "I'll search for that." in text_content(events)
+
+
+@pytest.mark.asyncio
+async def test_interception_handles_tavily_error_gracefully(monkeypatch):
+    """When Tavily fails, error result and generic summary are emitted."""
+    from api.web_tools.streaming import stream_with_web_tool_interception
+
+    async def boom(_api_key: str, _query: str) -> list[dict[str, str]]:
+        raise RuntimeError("Tavily API down")
+
+    monkeypatch.setattr("api.web_tools.tavily.tavily_search", boom)
+
+    provider_events = _build_provider_sse_stream(
+        ("web_search", {"query": "test"}),
+    )
+
+    async def fake_provider_stream():
+        for ev in provider_events:
+            yield ev
+
+    raw = "".join(
+        [
+            event
+            async for event in stream_with_web_tool_interception(
+                fake_provider_stream(),
+                tavily_api_key="tvly-test",
+            )
+        ]
+    )
+    events = parse_sse_text(raw)
+    assert_anthropic_stream_contract(events)
+
+    starts = [e for e in events if e.event == "content_block_start"]
+    assert starts[0].data["content_block"]["type"] == "server_tool_use"
+    # Result should contain an error
+    result_block = starts[1].data["content_block"]
+    assert result_block["type"] == "web_search_tool_result"
+    assert result_block["content"]["type"] == "web_search_tool_result_error"
+
+
+@pytest.mark.asyncio
+async def test_interception_no_tool_use_passes_through():
+    """Stream without any tool_use should pass through completely unchanged."""
+    from api.web_tools.streaming import stream_with_web_tool_interception
+
+    provider_events = _build_provider_sse_stream(text_before="Hello world")
+
+    async def fake_provider_stream():
+        for ev in provider_events:
+            yield ev
+
+    raw_original = "".join(provider_events)
+    raw_intercepted = "".join(
+        [
+            event
+            async for event in stream_with_web_tool_interception(
+                fake_provider_stream(),
+                tavily_api_key="tvly-test",
+            )
+        ]
+    )
+    # Should be exactly the same
+    assert raw_original == raw_intercepted
