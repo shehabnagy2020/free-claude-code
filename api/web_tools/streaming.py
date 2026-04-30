@@ -36,14 +36,15 @@ _WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch", "WebSearch", "WebFetch"}
 
 
 def _search_summary(query: str, results: list[dict[str, str]]) -> str:
+    today = datetime.now(UTC).strftime("%B %d, %Y")
     if not results:
-        return f"No web search results found for: {query}"
-    lines = [f"Search results for: {query}"]
+        return f"No web search results found for: {query} (searched {today})"
+    lines = [f"Web search results for: {query} (retrieved {today})"]
     for index, result in enumerate(results, start=1):
         snippet = result.get("snippet", "")
-        entry = f"{index}. {result['title']}\n{result['url']}"
+        entry = f"{index}. {result['title']}\n   {result['url']}"
         if snippet:
-            entry += f"\n{snippet}"
+            entry += f"\n   {snippet}"
         lines.append(entry)
     return "\n\n".join(lines)
 

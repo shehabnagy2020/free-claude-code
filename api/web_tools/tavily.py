@@ -13,6 +13,13 @@ from .constants import _MAX_FETCH_CHARS, _MAX_SEARCH_RESULTS, _REQUEST_TIMEOUT_S
 _SEARCH_URL = "https://api.tavily.com/search"
 _EXTRACT_URL = "https://api.tavily.com/extract"
 
+# Module-level client: reuses TCP connections and TLS sessions across calls.
+# Eliminates ~300ms handshake overhead per request (significant on Pi 4).
+_http_client = httpx.AsyncClient(
+    timeout=_REQUEST_TIMEOUT_S,
+    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0),
+)
+
 
 async def tavily_search(api_key: str, query: str) -> list[dict[str, str]]:
     """Run a web search via Tavily REST API."""
@@ -23,8 +30,7 @@ async def tavily_search(api_key: str, query: str) -> list[dict[str, str]]:
         "max_results": _MAX_SEARCH_RESULTS,
     }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S) as client:
-        response = await client.post(_SEARCH_URL, json=payload, headers=headers)
+    response = await _http_client.post(_SEARCH_URL, json=payload, headers=headers)
     if response.status_code != 200:
         logger.warning(
             "tavily_search failed status={} body={!r}",
@@ -53,8 +59,7 @@ async def tavily_fetch(api_key: str, url: str) -> dict[str, str]:
     logger.debug("tavily_fetch url={!r}", url)
     payload = {"urls": [url]}
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S) as client:
-        response = await client.post(_EXTRACT_URL, json=payload, headers=headers)
+    response = await _http_client.post(_EXTRACT_URL, json=payload, headers=headers)
     if response.status_code != 200:
         logger.warning(
             "tavily_fetch failed status={} body={!r}",

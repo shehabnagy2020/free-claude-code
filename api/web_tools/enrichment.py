@@ -7,6 +7,7 @@ the model) and replace the empty content with real Tavily search results.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from loguru import logger
@@ -120,6 +121,10 @@ async def enrich_empty_tool_results(
             query: str = str(inp.get("query", inp.get("q", "")))
             if not query:
                 continue
+            # Append current year if no year-like token present — improves relevance.
+            _year = str(datetime.now(UTC).year)
+            if _year not in query:
+                query = f"{query} {_year}"
             logger.info("enrichment: replacing WebSearch result with Tavily query={!r}", query)
             try:
                 results = await _tavily.tavily_search(tavily_api_key, query)

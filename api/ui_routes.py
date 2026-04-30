@@ -24,6 +24,37 @@ from .ui_db import UIChatDB
 
 ui_router = APIRouter(prefix="/ui/api")
 
+# Keywords that indicate the user needs real-time / current information.
+# Checked against the lowercased user message to decide whether to run Tavily
+# proactively before the LLM call. Module-level so it's only built once.
+_REALTIME_KEYWORDS: frozenset[str] = frozenset({
+    # Time references
+    "today", "tonight", "now", "current", "currently", "latest", "recent",
+    "recently", "right now", "at the moment", "this week", "this month",
+    "this year", "yesterday", "tomorrow", "upcoming", "ongoing", "live",
+    # Weather
+    "weather", "forecast", "temperature", "humidity", "rain", "snow",
+    "wind", "storm", "hurricane", "climate",
+    # News & events
+    "news", "breaking", "happened", "update", "updates", "announced",
+    "announcement", "launched", "released", "release", "event",
+    "election", "vote", "voted", "poll", "war", "conflict", "attack",
+    "protest", "crisis", "earthquake", "flood",
+    # Finance & markets
+    "price", "prices", "stock", "stocks", "market", "markets", "index",
+    "rate", "rates", "inflation", "ipo", "earnings", "crypto", "bitcoin",
+    "ethereum", "coin", "trading", "usd", "eur", "gbp",
+    # Sports
+    "score", "scores", "match", "game", "result", "results", "standings",
+    "fixture", "league", "tournament", "championship", "cup", "goal",
+    "player", "team", "transfer",
+    # Tech & AI
+    "trending", "viral", "ai model", "gpt", "gemini", "llm",
+    # Search intent
+    "search", "find", "look up", "look up", "who is", "what is",
+    "where is", "when did", "how much", "how many",
+})
+
 
 # ── Stateless HMAC token ──────────────────────────────────────────────────────────
 #
@@ -275,11 +306,6 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     # --- Proactive Tavily search ------------------------------------------------
     # Detect real-time queries and inject Tavily results into the system prompt
     # before the LLM call. No tool round-trip — works with any model.
-    _REALTIME_KEYWORDS = (
-        "weather", "news", "price", "score", "stock", "today", "current",
-        "latest", "now", "forecast", "temperature", "breaking", "live",
-        "match", "result", "rate", "trending", "happened", "update", "search", "find", "look up"
-    )
     _user_text_lower = body.content.lower()
     _needs_search = (
         settings.tavily_api_key
