@@ -195,10 +195,21 @@ export default function App() {
       setIsStreaming(true);
       setStreamingText("");
 
-      // Title is set server-side before the stream starts on the first turn.
-      // Refresh the sidebar immediately so the name appears without waiting.
+      // Optimistically update the session title in local state on the first turn
+      // so the sidebar reflects the new name immediately, without any network race.
       const isFirstTurn = messages.length === 0;
-      if (isFirstTurn) void loadSessions();
+      if (isFirstTurn && activeSessionId) {
+        const titleText = content.trim() || "🖼️ Image";
+        const newTitle =
+          titleText.length > 60
+            ? titleText.slice(0, 60).replace(/\n/g, " ") + "…"
+            : titleText.replace(/\n/g, " ");
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSessionId ? { ...s, title: newTitle } : s
+          )
+        );
+      }
       let accText = "";
       const ctrl = api.streamChat(
         token,
