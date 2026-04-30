@@ -76,28 +76,31 @@ class OpenAIChatTransport(BaseProvider):
             rate_window=config.rate_window,
             max_concurrency=config.max_concurrency,
         )
+        _limits = httpx.Limits(
+            max_keepalive_connections=5,
+            max_connections=10,
+            keepalive_expiry=30.0,
+        )
+        _timeout = httpx.Timeout(
+            config.http_read_timeout,
+            connect=config.http_connect_timeout,
+            read=config.http_read_timeout,
+            write=config.http_write_timeout,
+        )
         http_client = None
         if config.proxy:
             http_client = httpx.AsyncClient(
                 proxy=config.proxy,
-                timeout=httpx.Timeout(
-                    config.http_read_timeout,
-                    connect=config.http_connect_timeout,
-                    read=config.http_read_timeout,
-                    write=config.http_write_timeout,
-                ),
+                timeout=_timeout,
+                limits=_limits,
             )
         self._client = AsyncOpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
             max_retries=0,
-            timeout=httpx.Timeout(
-                config.http_read_timeout,
-                connect=config.http_connect_timeout,
-                read=config.http_read_timeout,
-                write=config.http_write_timeout,
-            ),
-            http_client=http_client,
+            timeout=_timeout,
+            http_client=http_client
+            or httpx.AsyncClient(timeout=_timeout, limits=_limits),
         )
 
     async def cleanup(self) -> None:
@@ -257,110 +260,148 @@ class OpenAIChatTransport(BaseProvider):
         finish_reason = None
         usage_info = None
 
+        _MAX_STREAM_RETRIES = 2
+
         async with self._global_rate_limiter.concurrency_slot():
-            try:
-                stream, body = await self._create_stream(body)
-                async for chunk in stream:
-                    if getattr(chunk, "usage", None):
-                        usage_info = chunk.usage
+            for _stream_attempt in range(1 + _MAX_STREAM_RETRIES):
+                _last_stream_error: Exception | None = None
+                try:
+                    if _stream_attempt > 0:
+                        logger.warning(
+                            "{}_STREAM:{} reconnecting (attempt {}/{})",
+                            tag,
+                            req_tag,
+                            _stream_attempt,
+                            _MAX_STREAM_RETRIES,
+                        )
+                    stream, body = await self._create_stream(body)
+                    async for chunk in stream:
+                        if getattr(chunk, "usage", None):
+                            usage_info = chunk.usage
 
-                    if not chunk.choices:
-                        continue
+                        if not chunk.choices:
+                            continue
 
-                    choice = chunk.choices[0]
-                    delta = choice.delta
-                    if delta is None:
-                        continue
+                        choice = chunk.choices[0]
+                        delta = choice.delta
+                        if delta is None:
+                            continue
 
-                    if choice.finish_reason:
-                        finish_reason = choice.finish_reason
-                        logger.debug("{} finish_reason: {}", tag, finish_reason)
+                        if choice.finish_reason:
+                            finish_reason = choice.finish_reason
+                            logger.debug("{} finish_reason: {}", tag, finish_reason)
 
-                    # Handle reasoning_content (OpenAI extended format)
-                    reasoning = getattr(delta, "reasoning_content", None)
-                    if thinking_enabled and reasoning:
-                        for event in sse.ensure_thinking_block():
-                            yield event
-                        yield sse.emit_thinking_delta(reasoning)
-
-                    # Provider-specific extra reasoning (e.g. OpenRouter reasoning_details)
-                    for event in self._handle_extra_reasoning(
-                        delta,
-                        sse,
-                        thinking_enabled=thinking_enabled,
-                    ):
-                        yield event
-
-                    # Handle text content
-                    if delta.content:
-                        for part in think_parser.feed(delta.content):
-                            if part.type == ContentType.THINKING:
-                                if not thinking_enabled:
-                                    continue
-                                for event in sse.ensure_thinking_block():
-                                    yield event
-                                yield sse.emit_thinking_delta(part.content)
-                            else:
-                                filtered_text, detected_tools = heuristic_parser.feed(
-                                    part.content
-                                )
-
-                                if filtered_text:
-                                    for event in sse.ensure_text_block():
-                                        yield event
-                                    yield sse.emit_text_delta(filtered_text)
-
-                                for tool_use in detected_tools:
-                                    for event in _iter_heuristic_tool_use_sse(
-                                        sse, tool_use
-                                    ):
-                                        yield event
-
-                    # Handle native tool calls
-                    if delta.tool_calls:
-                        for event in sse.close_content_blocks():
-                            yield event
-                        for tc in delta.tool_calls:
-                            tc_info = {
-                                "index": tc.index,
-                                "id": tc.id,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            for event in self._process_tool_call(tc_info, sse):
+                        # Handle reasoning_content (OpenAI extended format)
+                        reasoning = getattr(delta, "reasoning_content", None)
+                        if thinking_enabled and reasoning:
+                            for event in sse.ensure_thinking_block():
                                 yield event
+                            yield sse.emit_thinking_delta(reasoning)
 
-            except asyncio.CancelledError, GeneratorExit:
-                raise
-            except Exception as e:
-                self._log_stream_transport_error(tag, req_tag, e)
-                mapped_e = map_error(e, rate_limiter=self._global_rate_limiter)
-                base_message = user_visible_message_for_mapped_provider_error(
-                    mapped_e,
-                    provider_name=tag,
-                    read_timeout_s=self._config.http_read_timeout,
-                )
-                error_message = append_request_id(base_message, request_id)
-                logger.info(
-                    "{}_STREAM: Emitting SSE error event for {}{}",
-                    tag,
-                    type(e).__name__,
-                    req_tag,
-                )
-                for event in sse.close_all_blocks():
-                    yield event
-                if sse.blocks.has_emitted_tool_block():
-                    # Avoid a second assistant text block after an emitted tool_use, which
-                    # breaks OpenAI history replay (issue #206) when Claude Code stores it.
-                    yield sse.emit_top_level_error(error_message)
-                else:
-                    for event in sse.emit_error(error_message):
+                        # Provider-specific extra reasoning (e.g. OpenRouter reasoning_details)
+                        for event in self._handle_extra_reasoning(
+                            delta,
+                            sse,
+                            thinking_enabled=thinking_enabled,
+                        ):
+                            yield event
+
+                        # Handle text content
+                        if delta.content:
+                            for part in think_parser.feed(delta.content):
+                                if part.type == ContentType.THINKING:
+                                    if not thinking_enabled:
+                                        continue
+                                    for event in sse.ensure_thinking_block():
+                                        yield event
+                                    yield sse.emit_thinking_delta(part.content)
+                                else:
+                                    filtered_text, detected_tools = heuristic_parser.feed(
+                                        part.content
+                                    )
+
+                                    if filtered_text:
+                                        for event in sse.ensure_text_block():
+                                            yield event
+                                        yield sse.emit_text_delta(filtered_text)
+
+                                    for tool_use in detected_tools:
+                                        for event in _iter_heuristic_tool_use_sse(
+                                            sse, tool_use
+                                        ):
+                                            yield event
+
+                        # Handle native tool calls
+                        if delta.tool_calls:
+                            for event in sse.close_content_blocks():
+                                yield event
+                            for tc in delta.tool_calls:
+                                tc_info = {
+                                    "index": tc.index,
+                                    "id": tc.id,
+                                    "function": {
+                                        "name": tc.function.name,
+                                        "arguments": tc.function.arguments,
+                                    },
+                                }
+                                for event in self._process_tool_call(tc_info, sse):
+                                    yield event
+
+                    break  # stream completed cleanly
+
+                except asyncio.CancelledError, GeneratorExit:
+                    raise
+                except Exception as e:
+                    _last_stream_error = e
+                    _has_content = (
+                        sse.blocks.text_index != -1
+                        or sse.blocks.thinking_index != -1
+                        or sse.blocks.has_emitted_tool_block()
+                    )
+                    _can_retry = (
+                        not _has_content
+                        and _stream_attempt < _MAX_STREAM_RETRIES
+                        and GlobalRateLimiter._is_retryable_network_error(e)
+                    )
+                    if _can_retry:
+                        _delay = 1.5 * (_stream_attempt + 1)
+                        logger.warning(
+                            "{}_STREAM:{} network drop before content ({}), "
+                            "reconnecting in {:.1f}s",
+                            tag,
+                            req_tag,
+                            type(e).__name__,
+                            _delay,
+                        )
+                        await asyncio.sleep(_delay)
+                        continue
+
+                    self._log_stream_transport_error(tag, req_tag, e)
+                    mapped_e = map_error(e, rate_limiter=self._global_rate_limiter)
+                    base_message = user_visible_message_for_mapped_provider_error(
+                        mapped_e,
+                        provider_name=tag,
+                        read_timeout_s=self._config.http_read_timeout,
+                    )
+                    error_message = append_request_id(base_message, request_id)
+                    logger.info(
+                        "{}_STREAM: Emitting SSE error event for {}{}",
+                        tag,
+                        type(e).__name__,
+                        req_tag,
+                    )
+                    for event in sse.close_all_blocks():
                         yield event
-                yield sse.message_delta("end_turn", 1)
-                yield sse.message_stop()
-                return
+                    if sse.blocks.has_emitted_tool_block():
+                        # Avoid a second assistant text block after an emitted tool_use, which
+                        # breaks OpenAI history replay (issue #206) when Claude Code stores it.
+                        yield sse.emit_top_level_error(error_message)
+                    else:
+                        for event in sse.emit_error(error_message):
+                            yield event
+                    yield sse.message_delta("end_turn", 1)
+                    yield sse.message_stop()
+                    return
 
         # Flush remaining content
         remaining = think_parser.flush()

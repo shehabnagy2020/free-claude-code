@@ -200,7 +200,8 @@ def transform_native_sse_block_event(
         if not isinstance(block_type, str):
             return event
         prefix = _synthetic_close_other_open_blocks(state, upstream_index)
-        stored = copy.deepcopy(block)
+        # Shallow copy is sufficient: block_start values are strings/dicts with no deeper nesting.
+        stored = {k: dict(v) if isinstance(v, dict) else v for k, v in block.items()}
         new_idx = _allocate_new_segment(
             state,
             upstream_index,
@@ -273,7 +274,7 @@ def transform_native_sse_block_event(
                 state,
                 upstream_index,
                 block_type=block_kind,
-                last_start_block=copy.deepcopy(synthetic_block),
+                last_start_block={k: dict(v) if isinstance(v, dict) else v for k, v in synthetic_block.items()},
             )
             start_payload = {
                 "type": "content_block_start",

@@ -13,6 +13,16 @@ from providers.exceptions import (
 )
 from providers.rate_limit import GlobalRateLimiter
 
+# Network-level exception types that produce a stable user-facing message.
+_NETWORK_DROP_TYPES = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+    httpx.TimeoutException,
+    openai.APIConnectionError,
+)
+
 
 def user_visible_message_for_mapped_provider_error(
     mapped: Exception,
@@ -56,6 +66,14 @@ def map_error(
     if isinstance(e, openai.APIError):
         return APIError(
             message, status_code=getattr(e, "status_code", 500), raw_error=str(e)
+        )
+
+    # Network-level drops (connection reset, remote hangup, timeout, etc.)
+    if isinstance(e, _NETWORK_DROP_TYPES):
+        return APIError(
+            message,
+            status_code=503,
+            raw_error=str(e),
         )
 
     if isinstance(e, httpx.HTTPStatusError):

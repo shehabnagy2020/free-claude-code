@@ -196,6 +196,24 @@ class GlobalRateLimiter:
     # Status codes that warrant automatic retry with backoff.
     _RETRYABLE_STATUS_CODES: ClassVar[set[int]] = {429, 502, 503, 504, 529}
 
+    @staticmethod
+    def _is_retryable_network_error(e: Exception) -> bool:
+        """True for transient transport-level errors (connection drops, resets, timeouts)."""
+        if isinstance(
+            e,
+            (
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.WriteError,
+                httpx.RemoteProtocolError,
+                httpx.TimeoutException,
+            ),
+        ):
+            return True
+        if isinstance(e, openai.APIConnectionError):
+            return True
+        return False
+
     async def execute_with_retry(
         self,
         fn: Callable[..., Any],
@@ -209,7 +227,8 @@ class GlobalRateLimiter:
         """Execute an async callable with rate limiting and retry on transient errors.
 
         Waits for the proactive limiter before each attempt. On 429/529/5xx
-        transient errors, applies exponential backoff with jitter before retrying.
+        transient errors and network-level connection drops, applies exponential
+        backoff with jitter before retrying.
 
         Args:
             fn: Async callable to execute.
@@ -266,6 +285,24 @@ class GlobalRateLimiter:
                 )
                 if status in (429, 529):
                     self.set_blocked(delay)
+                await asyncio.sleep(delay)
+            except Exception as e:
+                if not self._is_retryable_network_error(e):
+                    raise
+                last_exc = e
+                if attempt >= max_retries:
+                    logger.warning(
+                        f"Network error retry exhausted after {max_retries} retries: "
+                        f"{type(e).__name__}"
+                    )
+                    break
+
+                delay = min(base_delay * (2**attempt), max_delay)
+                delay += random.uniform(0, jitter)
+                logger.warning(
+                    f"Network error {type(e).__name__}, attempt {attempt + 1}/{max_retries + 1}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
                 await asyncio.sleep(delay)
 
         assert last_exc is not None

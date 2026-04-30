@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Literal
 
@@ -61,6 +62,11 @@ class AnthropicMessagesTransport(BaseProvider):
                 connect=config.http_connect_timeout,
                 read=config.http_read_timeout,
                 write=config.http_write_timeout,
+            ),
+            limits=httpx.Limits(
+                max_keepalive_connections=5,
+                max_connections=10,
+                keepalive_expiry=30.0,
             ),
         )
 
@@ -298,69 +304,103 @@ class AnthropicMessagesTransport(BaseProvider):
         state = self._new_stream_state(request, thinking_enabled=thinking_enabled)
         emitted_tracker = EmittedNativeSseTracker()
 
+        _MAX_STREAM_RETRIES = 2
+
         async with self._global_rate_limiter.concurrency_slot():
-            try:
 
-                async def _validated_stream_send() -> httpx.Response:
-                    """Send request; raise inside retry loop on 429/529 so rate limiter can backoff."""
-                    send_response = await self._send_stream_request(body)
-                    if send_response.status_code in (429, 529):
-                        await send_response.aclose()
-                        send_response.raise_for_status()
-                    if send_response.status_code != 200:
-                        try:
-                            await self._raise_for_status(send_response, req_tag=req_tag)
-                        finally:
-                            if not send_response.is_closed:
-                                await send_response.aclose()
-                    return send_response
+            async def _validated_stream_send() -> httpx.Response:
+                """Send request; raise inside retry loop on 429/529 so rate limiter can backoff."""
+                send_response = await self._send_stream_request(body)
+                if send_response.status_code in (429, 529):
+                    await send_response.aclose()
+                    send_response.raise_for_status()
+                if send_response.status_code != 200:
+                    try:
+                        await self._raise_for_status(send_response, req_tag=req_tag)
+                    finally:
+                        if not send_response.is_closed:
+                            await send_response.aclose()
+                return send_response
 
-                response = await self._global_rate_limiter.execute_with_retry(
-                    _validated_stream_send
-                )
+            for _stream_attempt in range(1 + _MAX_STREAM_RETRIES):
+                try:
+                    if _stream_attempt > 0:
+                        logger.warning(
+                            "{}_STREAM:{} reconnecting (attempt {}/{})",
+                            tag,
+                            req_tag,
+                            _stream_attempt,
+                            _MAX_STREAM_RETRIES,
+                        )
+                    response = await self._global_rate_limiter.execute_with_retry(
+                        _validated_stream_send
+                    )
 
-                async for chunk in self._iter_stream_chunks(
-                    response,
-                    state=state,
-                    thinking_enabled=thinking_enabled,
-                ):
-                    sent_any_event = True
-                    emitted_tracker.feed(chunk)
-                    yield chunk
-
-            except Exception as error:
-                if not isinstance(error, httpx.HTTPStatusError):
-                    self._log_stream_transport_error(tag, req_tag, error)
-                error_message = self._get_error_message(error, request_id)
-
-                if response is not None and not response.is_closed:
-                    await response.aclose()
-
-                logger.info(
-                    "{}_STREAM: Emitting native SSE error event for {}{}",
-                    tag,
-                    type(error).__name__,
-                    req_tag,
-                )
-                if sent_any_event:
-                    for event in emitted_tracker.iter_close_unclosed_blocks():
-                        yield event
-                    for event in emitted_tracker.iter_midstream_error_tail(
-                        error_message,
-                        request=request,
-                        input_tokens=input_tokens,
-                        log_raw_sse_events=self._config.log_raw_sse_events,
+                    async for chunk in self._iter_stream_chunks(
+                        response,
+                        state=state,
+                        thinking_enabled=thinking_enabled,
                     ):
-                        yield event
-                else:
-                    for event in self._emit_error_events(
-                        request=request,
-                        input_tokens=input_tokens,
-                        error_message=error_message,
-                        sent_any_event=False,
-                    ):
-                        yield event
-                return
-            finally:
-                if response is not None and not response.is_closed:
-                    await response.aclose()
+                        sent_any_event = True
+                        emitted_tracker.feed(chunk)
+                        yield chunk
+
+                    break  # stream completed cleanly
+
+                except Exception as error:
+                    if response is not None and not response.is_closed:
+                        await response.aclose()
+                        response = None
+
+                    # Reconnect if no content blocks have reached the client yet
+                    _has_content_blocks = emitted_tracker.next_content_index() > 0
+                    _can_retry = (
+                        not _has_content_blocks
+                        and _stream_attempt < _MAX_STREAM_RETRIES
+                        and GlobalRateLimiter._is_retryable_network_error(error)
+                    )
+                    if _can_retry:
+                        _delay = 1.5 * (_stream_attempt + 1)
+                        logger.warning(
+                            "{}_STREAM:{} network drop before content ({}), "
+                            "reconnecting in {:.1f}s",
+                            tag,
+                            req_tag,
+                            type(error).__name__,
+                            _delay,
+                        )
+                        await asyncio.sleep(_delay)
+                        continue
+
+                    if not isinstance(error, httpx.HTTPStatusError):
+                        self._log_stream_transport_error(tag, req_tag, error)
+                    error_message = self._get_error_message(error, request_id)
+
+                    logger.info(
+                        "{}_STREAM: Emitting native SSE error event for {}{}",
+                        tag,
+                        type(error).__name__,
+                        req_tag,
+                    )
+                    if sent_any_event:
+                        for event in emitted_tracker.iter_close_unclosed_blocks():
+                            yield event
+                        for event in emitted_tracker.iter_midstream_error_tail(
+                            error_message,
+                            request=request,
+                            input_tokens=input_tokens,
+                            log_raw_sse_events=self._config.log_raw_sse_events,
+                        ):
+                            yield event
+                    else:
+                        for event in self._emit_error_events(
+                            request=request,
+                            input_tokens=input_tokens,
+                            error_message=error_message,
+                            sent_any_event=False,
+                        ):
+                            yield event
+                    return
+                finally:
+                    if response is not None and not response.is_closed:
+                        await response.aclose()

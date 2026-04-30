@@ -17,6 +17,8 @@ from core.anthropic.sse import ANTHROPIC_SSE_RESPONSE_HEADERS
 from providers.base import BaseProvider
 from providers.exceptions import InvalidRequestError, ProviderError
 
+from config.provider_catalog import PROVIDER_CATALOG
+
 from .model_router import ModelRouter
 from .models.anthropic import MessagesRequest, TokenCountRequest
 from .models.responses import TokenCountResponse
@@ -33,7 +35,10 @@ TokenCounter = Callable[[list[Any], str | list[Any] | None, list[Any] | None], i
 ProviderGetter = Callable[[str], BaseProvider]
 
 # Providers that use ``/chat/completions`` + Anthropic-to-OpenAI conversion (not native Messages).
-_OPENAI_CHAT_UPSTREAM_IDS = frozenset({"nvidia_nim"})
+# Derived from the catalog so new openai_chat-transport providers auto-qualify.
+_OPENAI_CHAT_UPSTREAM_IDS = frozenset(
+    pid for pid, d in PROVIDER_CATALOG.items() if d.transport_type == "openai_chat"
+)
 
 
 def anthropic_sse_streaming_response(

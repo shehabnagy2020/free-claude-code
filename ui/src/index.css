@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    height: 100%;
+    /* Safe area for iOS */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2a2d35;
+    border-radius: 99px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a3d45;
+  }
+}
+
+@layer components {
+  /* Thin custom scrollbar – applied on overflow containers */
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #2a2d35 transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #2a2d35;
+    border-radius: 99px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #3a3d45;
+  }
+
+  /* Typing indicator dots */
+  .typing-dot {
+    @apply inline-block w-1.5 h-1.5 rounded-full bg-slate-400;
+    animation: pulseDot 1.2s ease-in-out infinite;
+  }
+  .typing-dot:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .typing-dot:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  /* Prose overrides for markdown messages */
+  .message-prose pre {
+    @apply bg-[#161b22] border border-slate-800 rounded-lg overflow-x-auto text-sm;
+  }
+  .message-prose code {
+    @apply bg-[#1f2128] text-blue-300 rounded px-1 py-0.5 text-[0.85em] font-mono;
+  }
+  .message-prose pre code {
+    @apply bg-transparent text-inherit p-0;
+  }
+  .message-prose table {
+    @apply w-full border-collapse text-sm;
+  }
+  .message-prose th {
+    @apply border border-slate-700 px-3 py-1.5 text-left text-slate-300 bg-surface-card;
+  }
+  .message-prose td {
+    @apply border border-slate-800 px-3 py-1.5 text-slate-300;
+  }
+  .message-prose blockquote {
+    @apply border-l-2 border-blue-500 pl-4 text-slate-400 italic;
+  }
+  .message-prose h1,
+  .message-prose h2,
+  .message-prose h3 {
+    @apply text-slate-100 font-semibold mt-4 mb-2;
+  }
+  .message-prose h1 {
+    @apply text-xl;
+  }
+  .message-prose h2 {
+    @apply text-lg;
+  }
+  .message-prose h3 {
+    @apply text-base;
+  }
+  .message-prose p {
+    @apply text-slate-300 leading-relaxed;
+  }
+  .message-prose ul {
+    @apply list-disc pl-5 text-slate-300;
+  }
+  .message-prose ol {
+    @apply list-decimal pl-5 text-slate-300;
+  }
+  .message-prose li {
+    @apply mb-1;
+  }
+  .message-prose a {
+    @apply text-blue-400 underline;
+  }
+  .message-prose hr {
+    @apply border-slate-800;
+  }
+}

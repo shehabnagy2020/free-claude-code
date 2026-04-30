@@ -272,6 +272,10 @@ class Settings(BaseSettings):
         default=None, validation_alias="MAX_MESSAGE_LOG_ENTRIES_PER_CHAT"
     )
 
+    # ==================== Web Chat UI ====================
+    # Password for the built-in web chat UI. Change via UI_PASSWORD in .env.
+    ui_password: str = Field(default="Shehab", validation_alias="UI_PASSWORD")
+
     # ==================== Server ====================
     host: str = "0.0.0.0"
     port: int = 8082

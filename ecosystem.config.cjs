@@ -22,5 +22,17 @@ module.exports = {
         UVICORN_LIMIT_CONCURRENCY: 50,
       },
     },
+    {
+      name: "fcc-ui",
+      script: "npx",
+      args: "vite build --watch",
+      cwd: path.join(__dirname, "ui"),
+      watch: false, // Vite's own watcher handles src changes
+      autorestart: false, // Vite watch mode is long-running; don't restart on exit
+      max_memory_restart: "512M",
+      env: {
+        NODE_ENV: "production",
+      },
+    },
   ],
 };

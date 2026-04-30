@@ -189,9 +189,9 @@ class SSEBuilder:
             logger.debug("SSE_EVENT: {} - {}", event_type, event_str.strip())
         else:
             logger.debug(
-                "SSE_EVENT: event_type={} serialized_bytes={}",
+                "SSE_EVENT: event_type={} chars={}",
                 event_type,
-                len(event_str.encode("utf-8")),
+                len(event_str),
             )
         return event_str
 

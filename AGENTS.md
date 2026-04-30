@@ -20,6 +20,7 @@
 - You are an expert Software Architect and Systems Engineer.
 - Goal: Zero-defect, root-cause-oriented engineering for bugs; test-driven engineering for new features. Think carefully; no need to rush.
 - Code: Write the simplest code possible. Keep the codebase minimal and modular.
+- **Deployment target**: Raspberry Pi 4 (8 GB). Prefer low-allocation hot paths; avoid unnecessary copies, byte-string encodes, or `copy.deepcopy` on per-event data.
 
 ## ARCHITECTURE PRINCIPLES (see PLAN.md)
 
@@ -33,6 +34,20 @@
 - **No type ignores**: Do not add `# type: ignore` or `# ty: ignore`. Fix the underlying type issue.
 - **Complete migrations**: When moving modules, update imports to the new owner and remove old compatibility shims in the same change unless preserving a published interface is explicitly required.
 - **Maximum Test Coverage**: There should be maximum test coverage for everything, preferably live smoke test coverage to catch bugs early
+- **Catalog-driven provider sets**: Derive provider-type sets (e.g. `_OPENAI_CHAT_UPSTREAM_IDS`) from `config.provider_catalog.PROVIDER_CATALOG` using `d.transport_type`, never hardcode provider id strings in service logic.
+
+## PROVIDER & CONNECTION STABILITY
+
+- **Retryable network errors**: `httpx.ConnectError`, `ReadError`, `WriteError`, `RemoteProtocolError`, `TimeoutException`, and `openai.APIConnectionError` are all retryable. `GlobalRateLimiter.execute_with_retry` handles them with exponential backoff. `map_error` maps them to `APIError(503)`.
+- **Mid-stream reconnect**: Both `OpenAIChatTransport` (`openai_compat.py`) and `AnthropicMessagesTransport` (`anthropic_messages.py`) retry the stream up to 2 times (`_MAX_STREAM_RETRIES = 2`) when a retryable network error occurs **before any content blocks have been emitted to the client**. Once content is flowing the error path is used instead (cannot unsend partial SSE).
+- **keepalive_expiry**: All httpx clients use `keepalive_expiry=30.0` (via `httpx.Limits`) to prevent stale-connection drops on slow networks.
+- **Error mapping**: Always call `map_error(e, rate_limiter=self._global_rate_limiter)` in streaming transports so reactive 429 handling is scoped to the correct provider.
+
+## PERFORMANCE INVARIANTS (Pi 4)
+
+- **SSE byte counting**: Do not call `.encode("utf-8")` on every SSE event string to count bytes. Use `len(event_str)` (char count) in `_format_event`.
+- **tiktoken optional**: Import tiktoken inside `try/except` in both `core/anthropic/sse.py` and `core/anthropic/tokens.py`. All encode calls go through `_encode()` helper which falls back to `len(text) // 4` when the C extension is missing.
+- **Shallow copy for SSE block state**: `content_block_start` payloads in `native_sse_block_policy.py` use a one-level manual dict copy instead of `copy.deepcopy` — block fields are flat strings/dicts.
 
 ## COGNITIVE WORKFLOW
 
@@ -59,4 +74,4 @@
 - Image messages bypass the Claude CLI subprocess (images cannot be passed via `-p` command line flag)
 - OpenAI-compatible providers (NVIDIA NIM) receive images as `image_url` format; native Anthropic providers receive standard Anthropic image blocks
 - Test image handling with edge cases: empty captions, multiple images, unsupported formats
-- Key modules: `messaging/models.py` (ImageAttachment), `messaging/handler.py` (_send_image_message_to_api), `messaging/platforms/discord.py` and `telegram.py` (image extraction), `core/anthropic/conversion.py` (OpenAI image_url conversion)
+- Key modules: `messaging/models.py` (ImageAttachment), `messaging/handler.py` (\_send_image_message_to_api), `messaging/platforms/discord.py` and `telegram.py` (image extraction), `core/anthropic/conversion.py` (OpenAI image_url conversion)

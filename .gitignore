@@ -13,3 +13,5 @@ debug-*.log
 llama_cache
 .smoke-results
 *.log
+**/node_modules
+**/dist
