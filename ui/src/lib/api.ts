@@ -199,75 +199,109 @@ export function streamChat(
   const ctrl = new AbortController();
 
   async function run() {
-    let res: Response;
-    try {
-      res = await fetch(`${BASE}/chat`, {
-        method: "POST",
-        headers: authHeaders(token),
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
-    } catch (e) {
-      if ((e as Error).name === "AbortError") return;
-      callbacks.onError("Connection failed");
-      return;
-    }
+    const MAX_RETRIES = 2;
 
-    if (!res.ok) {
-      const err = await res
-        .json()
-        .catch(() => ({ detail: `HTTP ${res.status}` }));
-      callbacks.onError(
-        (err as { detail?: string }).detail ?? `HTTP ${res.status}`
-      );
-      return;
-    }
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff: 1s, 2s
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+        if (ctrl.signal.aborted) return;
+      }
 
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+      let res: Response;
+      try {
+        res = await fetch(`${BASE}/chat`, {
+          method: "POST",
+          headers: authHeaders(token),
+          body: JSON.stringify(payload),
+          signal: ctrl.signal,
+        });
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        if (attempt < MAX_RETRIES) continue;
+        callbacks.onError("Connection failed");
+        return;
+      }
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      if (!res.ok) {
+        const err = await res
+          .json()
+          .catch(() => ({ detail: `HTTP ${res.status}` }));
+        // Retry on 5xx, surface 4xx immediately
+        if (res.status >= 500 && attempt < MAX_RETRIES) continue;
+        callbacks.onError(
+          (err as { detail?: string }).detail ?? `HTTP ${res.status}`
+        );
+        return;
+      }
 
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let receivedContent = false;
+      let streamError: string | null = null;
 
-        for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (!data || data === "[DONE]") continue;
-          try {
-            const evt = JSON.parse(data) as {
-              type?: string;
-              delta?: { type?: string; text?: string };
-              error?: { message?: string };
-            };
-            if (
-              evt.type === "content_block_delta" &&
-              evt.delta?.type === "text_delta"
-            ) {
-              callbacks.onDelta(evt.delta.text ?? "");
-            } else if (evt.type === "error") {
-              callbacks.onError(evt.error?.message ?? "Stream error");
-              return;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === "[DONE]") continue;
+            try {
+              const evt = JSON.parse(data) as {
+                type?: string;
+                delta?: { type?: string; text?: string };
+                error?: { message?: string };
+              };
+              if (
+                evt.type === "content_block_delta" &&
+                evt.delta?.type === "text_delta"
+              ) {
+                receivedContent = true;
+                callbacks.onDelta(evt.delta.text ?? "");
+              } else if (evt.type === "error") {
+                streamError = evt.error?.message ?? "Stream error";
+              }
+            } catch {
+              // Ignore malformed JSON lines
             }
-          } catch {
-            // Ignore malformed JSON lines
           }
+
+          if (streamError) break;
         }
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        // Network drop mid-stream
+        if (!receivedContent && attempt < MAX_RETRIES) continue;
+        // If we already had content, gracefully end rather than showing error
+        if (receivedContent) {
+          callbacks.onDone();
+          return;
+        }
+        callbacks.onError("Stream interrupted – please try again");
+        return;
       }
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        callbacks.onError("Stream interrupted");
+
+      if (streamError) {
+        if (!receivedContent && attempt < MAX_RETRIES) continue;
+        if (receivedContent) {
+          callbacks.onDone();
+          return;
+        }
+        callbacks.onError(streamError);
+        return;
       }
+
+      callbacks.onDone();
       return;
     }
-
-    callbacks.onDone();
   }
 
   void run();

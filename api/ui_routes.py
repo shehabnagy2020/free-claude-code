@@ -269,35 +269,70 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     session_id = body.session_id
     user_text_for_title = body.content.strip() or "🖼️ Image"
 
+    _MAX_BACKEND_RETRIES = 2
+
     async def _stream_and_save() -> AsyncIterator[str]:
+        import asyncio as _asyncio
+
         text_parts: list[str] = []
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(300.0, connect=10.0),
-                limits=httpx.Limits(keepalive_expiry=30.0),
-            ) as client:
-                async with client.stream(
-                    "POST", api_url, json=payload, headers=headers
-                ) as resp:
-                    async for raw_line in resp.aiter_lines():
-                        # Re-emit the line with newline restored
-                        yield (raw_line + "\n") if raw_line else "\n"
+            for attempt in range(_MAX_BACKEND_RETRIES + 1):
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(300.0, connect=15.0),
+                        limits=httpx.Limits(keepalive_expiry=30.0),
+                    ) as client:
+                        async with client.stream(
+                            "POST", api_url, json=payload, headers=headers
+                        ) as resp:
+                            # Retry on 5xx before any content
+                            if resp.status_code >= 500 and attempt < _MAX_BACKEND_RETRIES:
+                                logger.warning(
+                                    "UI chat: /v1/messages returned {} on attempt {}, retrying",
+                                    resp.status_code, attempt + 1,
+                                )
+                                await _asyncio.sleep(1.0 * (attempt + 1))
+                                continue
+                            if resp.status_code >= 400:
+                                body_text = await resp.aread()
+                                detail = body_text.decode(errors="replace")[:200]
+                                logger.warning("UI chat: upstream error {}: {}", resp.status_code, detail)
+                                yield f"data: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"Upstream error {resp.status_code}\"}}}}\n\n"
+                                return
 
-                        # Buffer text deltas for DB persistence
-                        if raw_line.startswith("data:"):
-                            data_str = raw_line[5:].strip()
-                            try:
-                                evt = json.loads(data_str)
-                                if evt.get("type") == "content_block_delta":
-                                    delta = evt.get("delta", {})
-                                    if delta.get("type") == "text_delta":
-                                        text_parts.append(delta.get("text", ""))
-                            except (json.JSONDecodeError, KeyError, AttributeError):
-                                pass
+                            async for raw_line in resp.aiter_lines():
+                                yield (raw_line + "\n") if raw_line else "\n"
+                                if raw_line.startswith("data:"):
+                                    data_str = raw_line[5:].strip()
+                                    try:
+                                        evt = json.loads(data_str)
+                                        if evt.get("type") == "content_block_delta":
+                                            delta = evt.get("delta", {})
+                                            if delta.get("type") == "text_delta":
+                                                text_parts.append(delta.get("text", ""))
+                                    except (json.JSONDecodeError, KeyError, AttributeError):
+                                        pass
+                    # Stream completed successfully – exit retry loop
+                    break
 
-        except Exception as e:
-            logger.warning("UI chat stream error: {}", type(e).__name__)
-            yield "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Connection lost\"}}\n\n"
+                except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                    logger.warning(
+                        "UI chat: connect error attempt {}/{}: {}",
+                        attempt + 1, _MAX_BACKEND_RETRIES + 1, type(e).__name__,
+                    )
+                    if attempt < _MAX_BACKEND_RETRIES:
+                        await _asyncio.sleep(1.0 * (attempt + 1))
+                        continue
+                    yield "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Could not reach provider – please retry\"}}\n\n"
+
+                except Exception as e:
+                    if text_parts:
+                        logger.warning("UI chat stream dropped after content: {}", type(e).__name__)
+                    else:
+                        logger.warning("UI chat stream error: {}", type(e).__name__)
+                        yield "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Stream interrupted – please retry\"}}\n\n"
+                    break
+
         finally:
             full_text = "".join(text_parts)
             if full_text:

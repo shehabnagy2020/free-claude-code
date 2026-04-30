@@ -3,12 +3,18 @@ import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Check, Copy, User, X } from "lucide-react";
-import { useCallback, useState } from "react";
-import type { Message } from "../types";
+import { Check, Copy, RotateCcw, User, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { Message, ModelOption } from "../types";
 
 interface Props {
   message: Message;
+  models?: ModelOption[];
+  onResend?: (
+    content: string,
+    imageBlocks: Array<{ media_type: string; data: string }>,
+    model: string
+  ) => void;
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -38,7 +44,11 @@ function CopyButton({ text }: { text: string }) {
 }
 
 /** Parse message content – may be plain text or a JSON array of Anthropic content blocks. */
-function parseContent(raw: string): { text: string; images: string[] } {
+function parseContent(raw: string): {
+  text: string;
+  images: string[];
+  rawImageBlocks: Array<{ media_type: string; data: string }>;
+} {
   if (raw.startsWith("[")) {
     try {
       const blocks = JSON.parse(raw) as Array<{
@@ -50,15 +60,22 @@ function parseContent(raw: string): { text: string; images: string[] } {
         .filter((b) => b.type === "text")
         .map((b) => b.text ?? "")
         .join("\n");
-      const images = blocks
-        .filter((b) => b.type === "image" && b.source?.type === "base64")
-        .map((b) => `data:${b.source!.media_type};base64,${b.source!.data}`);
-      return { text, images };
+      const imageBlocks = blocks.filter(
+        (b) => b.type === "image" && b.source?.type === "base64"
+      );
+      const images = imageBlocks.map(
+        (b) => `data:${b.source!.media_type};base64,${b.source!.data}`
+      );
+      const rawImageBlocks = imageBlocks.map((b) => ({
+        media_type: b.source!.media_type,
+        data: b.source!.data,
+      }));
+      return { text, images, rawImageBlocks };
     } catch {
       // fall through to plain text
     }
   }
-  return { text: raw, images: [] };
+  return { text: raw, images: [], rawImageBlocks: [] };
 }
 
 function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
@@ -84,40 +101,118 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
-export default function MessageBubble({ message }: Props) {
+export default function MessageBubble({ message, models, onResend }: Props) {
   const isUser = message.role === "user";
-  const { text, images } = parseContent(message.content);
+  const { text, images, rawImageBlocks } = parseContent(message.content);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [loadedSet, setLoadedSet] = useState<Set<number>>(() => new Set());
+  const [resendOpen, setResendOpen] = useState(false);
+  const resendRef = useRef<HTMLDivElement>(null);
+
+  const markLoaded = useCallback((i: number) => {
+    setLoadedSet((prev) => {
+      const s = new Set(prev);
+      s.add(i);
+      return s;
+    });
+  }, []);
+
+  // Close resend dropdown on outside click
+  useEffect(() => {
+    if (!resendOpen) return;
+    function handler(e: MouseEvent) {
+      if (resendRef.current && !resendRef.current.contains(e.target as Node)) {
+        setResendOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [resendOpen]);
 
   if (isUser) {
     return (
-      <div className="flex justify-end px-4 py-2 animate-fade-in">
+      <div className="group flex justify-end px-4 py-2 animate-fade-in">
         {lightboxSrc && (
           <ImageLightbox
             src={lightboxSrc}
             onClose={() => setLightboxSrc(null)}
           />
         )}
-        <div className="flex items-end gap-2 max-w-[80%]">
-          <div className="rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white shadow-md shadow-blue-900/20">
-            {images.length > 0 && (
-              <div className="mb-2 flex flex-wrap gap-1.5">
-                {images.map((src, i) => (
-                  <img
-                    key={i}
-                    src={src}
-                    alt={`image ${i + 1}`}
-                    className="max-h-48 max-w-[240px] rounded-lg object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                    onClick={() => setLightboxSrc(src)}
-                  />
-                ))}
-              </div>
-            )}
-            {text && <p className="whitespace-pre-wrap break-words">{text}</p>}
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-end gap-2 max-w-[80%]">
+            <div className="rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white shadow-md shadow-blue-900/20">
+              {images.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {images.map((src, i) => (
+                    <div
+                      key={i}
+                      className="relative rounded-lg overflow-hidden"
+                      style={{
+                        width: loadedSet.has(i) ? undefined : 80,
+                        height: loadedSet.has(i) ? undefined : 80,
+                      }}
+                    >
+                      {!loadedSet.has(i) && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-blue-500/30 rounded-lg">
+                          <div className="w-5 h-5 rounded-full border-2 border-white/60 border-t-transparent animate-spin" />
+                        </div>
+                      )}
+                      <img
+                        src={src}
+                        alt={`image ${i + 1}`}
+                        className={`max-h-48 max-w-[240px] rounded-lg object-cover cursor-pointer hover:opacity-90 transition-opacity ${
+                          loadedSet.has(i) ? "opacity-100" : "opacity-0"
+                        }`}
+                        onLoad={() => markLoaded(i)}
+                        onClick={() => setLightboxSrc(src)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {text && (
+                <p className="whitespace-pre-wrap break-words">{text}</p>
+              )}
+            </div>
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600/20 border border-blue-500/20">
+              <User className="h-3.5 w-3.5 text-blue-400" />
+            </div>
           </div>
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600/20 border border-blue-500/20">
-            <User className="h-3.5 w-3.5 text-blue-400" />
-          </div>
+
+          {/* Resend with model picker */}
+          {onResend && models && models.length > 0 && (
+            <div
+              ref={resendRef}
+              className="relative mr-9 opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              <button
+                onClick={() => setResendOpen((v) => !v)}
+                className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-surface-500 hover:text-surface-200 hover:bg-white/8 transition"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Resend
+              </button>
+              {resendOpen && (
+                <div className="absolute bottom-full mb-1 right-0 z-20 min-w-[160px] rounded-xl border border-white/10 bg-[#1a1d25] p-1 shadow-xl">
+                  <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-surface-500">
+                    Choose model
+                  </p>
+                  {models.map((m) => (
+                    <button
+                      key={m.claude_model}
+                      onClick={() => {
+                        setResendOpen(false);
+                        onResend(text, rawImageBlocks, m.claude_model);
+                      }}
+                      className="w-full rounded-lg px-3 py-2 text-left text-xs text-surface-200 hover:bg-white/10 transition"
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     );

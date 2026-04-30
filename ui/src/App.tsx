@@ -151,7 +151,11 @@ export default function App() {
   );
 
   const handleSendMessage = useCallback(
-    async (content: string, images: ImageAttachment[] = []) => {
+    async (
+      content: string,
+      images: ImageAttachment[] = [],
+      modelOverride?: string
+    ) => {
       if (
         !token ||
         !activeSessionId ||
@@ -201,7 +205,10 @@ export default function App() {
             media_type: img.media_type,
             data: img.data,
           })),
-          model: selectedModel?.claude_model ?? "claude-opus-4-20250514",
+          model:
+            modelOverride ??
+            selectedModel?.claude_model ??
+            "claude-opus-4-20250514",
           max_tokens: 8192,
         },
         {
@@ -230,6 +237,22 @@ export default function App() {
       abortRef.current = ctrl;
     },
     [token, activeSessionId, isStreaming, selectedModel, loadSessions]
+  );
+
+  const handleResendMessage = useCallback(
+    (
+      content: string,
+      imageBlocks: Array<{ media_type: string; data: string }>,
+      modelId: string
+    ) => {
+      const images: ImageAttachment[] = imageBlocks.map((b) => ({
+        media_type: b.media_type,
+        data: b.data,
+        preview_url: `data:${b.media_type};base64,${b.data}`,
+      }));
+      void handleSendMessage(content, images, modelId);
+    },
+    [handleSendMessage]
   );
 
   const handleStopStreaming = useCallback(() => {
@@ -303,7 +326,9 @@ export default function App() {
             isStreaming={isStreaming}
             error={error}
             hasSession={activeSessionId !== null}
+            models={models}
             onSend={handleSendMessage}
+            onResend={handleResendMessage}
             onStop={handleStopStreaming}
             onNewChat={handleNewChat}
           />

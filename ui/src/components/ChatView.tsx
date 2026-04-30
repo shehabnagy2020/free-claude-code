@@ -6,8 +6,11 @@ import {
   useCallback,
 } from "react";
 import { ArrowUp, ImagePlus, MessageSquarePlus, Square, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import MessageBubble from "./MessageBubble";
-import type { ImageAttachment, Message } from "../types";
+import type { ImageAttachment, Message, ModelOption } from "../types";
 
 const ACCEPTED_IMAGE_TYPES = [
   "image/jpeg",
@@ -24,7 +27,13 @@ interface Props {
   isStreaming: boolean;
   error: string | null;
   hasSession: boolean;
+  models: ModelOption[];
   onSend: (content: string, images: ImageAttachment[]) => void;
+  onResend: (
+    content: string,
+    imageBlocks: Array<{ media_type: string; data: string }>,
+    model: string
+  ) => void;
   onStop: () => void;
   onNewChat: () => void;
 }
@@ -85,8 +94,10 @@ function StreamingBubble({ text }: { text: string }) {
             />
           </svg>
         </div>
-        <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[#1a1d25] px-4 py-3 text-sm text-surface-100 shadow">
-          <p className="whitespace-pre-wrap break-words">{text}</p>
+        <div className="message-prose min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[#1a1d25] px-4 py-3 text-sm text-surface-100 shadow">
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+            {text}
+          </ReactMarkdown>
           <span className="inline-block w-0.5 h-3.5 bg-blue-400 animate-pulse ml-0.5 translate-y-0.5" />
         </div>
       </div>
@@ -127,7 +138,9 @@ export default function ChatView({
   isStreaming,
   error,
   hasSession,
+  models,
   onSend,
+  onResend,
   onStop,
   onNewChat,
 }: Props) {
@@ -245,7 +258,12 @@ export default function ChatView({
         ) : (
           <>
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+              <MessageBubble
+                key={m.id}
+                message={m}
+                models={models}
+                onResend={onResend}
+              />
             ))}
             {isStreaming && !streamingText && <TypingIndicator />}
             {isStreaming && streamingText && (
