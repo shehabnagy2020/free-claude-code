@@ -230,17 +230,21 @@ export default function App() {
             setIsStreaming(false);
             setStreamingText("");
             // Background sync: replace optimistic message with canonical DB rows.
-            // Retry up to 3 times (300 ms apart) to handle the race between the
-            // SSE stream ending and the backend finally-block completing its INSERT.
+            // Retry up to 3 times to handle the race between the SSE stream ending
+            // and the backend finally-block completing its INSERT.
             // loadSessions is called after the DB write is confirmed so the
             // auto-generated title is already set by the time we refresh the list.
-            for (let attempt = 0; attempt < 3; attempt++) {
-              await new Promise<void>((r) => setTimeout(r, 300));
+            const delays = [100, 300, 600];
+            for (let attempt = 0; attempt < delays.length; attempt++) {
+              await new Promise<void>((r) => setTimeout(r, delays[attempt]));
               try {
                 const msgs = await api.fetchMessages(token, activeSessionId);
                 // Only replace once the assistant message has been persisted.
                 if (msgs[msgs.length - 1]?.role === "assistant") {
                   setMessages(msgs);
+                  // Wait a beat for the backend's title-update (runs after add_message
+                  // in the same finally block) to commit before refreshing sidebar.
+                  await new Promise<void>((r) => setTimeout(r, 300));
                   void loadSessions();
                   break;
                 }
