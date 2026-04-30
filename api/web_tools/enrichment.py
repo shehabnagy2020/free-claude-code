@@ -110,17 +110,20 @@ async def enrich_empty_tool_results(
         content = getattr(block, "content", None) if not isinstance(block, dict) else block.get("content")
 
         is_empty = _is_empty_result(content)
+        # For agent web tools we always replace with Tavily regardless of content,
+        # because Claude Code's own DuckDuckGo search returns unreliable results.
+        tool_info = tool_use_index.get(tool_use_id) if tool_use_id else None
+        tool_name_for_block = tool_info["name"] if tool_info else ""
+        always_replace = tool_name_for_block in (_AGENT_WEB_SEARCH_NAMES | _AGENT_WEB_FETCH_NAMES)
         logger.info(
-            "enrichment: block[{}] type=tool_result id={} is_empty={} content_preview={!r}",
-            i, tool_use_id, is_empty,
+            "enrichment: block[{}] type=tool_result id={} is_empty={} always_replace={} content_preview={!r}",
+            i, tool_use_id, is_empty, always_replace,
             (str(content)[:120] if content is not None else None),
         )
-        if not tool_use_id or not is_empty:
-            continue
-
-        tool_info = tool_use_index.get(tool_use_id)
-        if not tool_info:
+        if not tool_use_id or not tool_info:
             logger.info("enrichment: tool_use_id={} not found in index", tool_use_id)
+            continue
+        if not is_empty and not always_replace:
             continue
 
         name: str = tool_info["name"]
@@ -130,7 +133,7 @@ async def enrich_empty_tool_results(
             query: str = str(inp.get("query", inp.get("q", "")))
             if not query:
                 continue
-            logger.info("enrichment: empty WebSearch result — querying Tavily query={!r}", query)
+            logger.info("enrichment: replacing WebSearch result with Tavily query={!r}", query)
             try:
                 results = await _tavily.tavily_search(tavily_api_key, query)
                 enrichments[i] = _search_summary(query, results)
@@ -142,7 +145,7 @@ async def enrich_empty_tool_results(
             url: str = str(inp.get("url", ""))
             if not url:
                 continue
-            logger.info("enrichment: empty WebFetch result — fetching via Tavily url={!r}", url)
+            logger.info("enrichment: replacing WebFetch result with Tavily url={!r}", url)
             try:
                 fetched = await _tavily.tavily_fetch(tavily_api_key, url)
                 enrichments[i] = fetched.get("data", "")[:2000]
