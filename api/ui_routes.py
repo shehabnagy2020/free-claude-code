@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import re
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
@@ -265,206 +264,70 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     # Build the MessagesRequest and call the service in-process (no HTTP loopback)
     settings = get_settings()
 
-    # Inject web_search / web_fetch tools when Tavily is configured so the model
-    # can use them naturally without the caller forcing tool_choice.
-    _WEB_TOOLS: list[dict[str, Any]] = [
-        {
-            "name": "web_search",
-            "type": "custom",
-            "description": (
-                "Search the web for current information such as news, weather, prices, "
-                "events, or anything that may have changed after your knowledge cutoff."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The search query."},
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "web_fetch",
-            "type": "custom",
-            "description": "Fetch and read the full content of a URL.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "The URL to fetch."},
-                },
-                "required": ["url"],
-            },
-        },
-    ]
-    injected_tools = _WEB_TOOLS if settings.tavily_api_key else None
-
     service = ClaudeProxyService(
         settings,
         provider_getter=lambda pt: resolve_provider(pt, app=request.app, settings=settings),
     )
 
     session_id = body.session_id
-    # Keep a mutable reference to the current messages list so the agentic loop
-    # can append tool_result turns without touching the outer api_messages list.
     loop_messages: list[dict[str, Any]] = list(api_messages)
 
-    async def _collect_response(
-        it: AsyncIterator[str],
-    ) -> tuple[list[str], list[str], str | None, dict[str, Any] | None]:
-        """Drain *it*, return (chunks, text_parts, tool_name, tool_input)."""
-        chunks: list[str] = []
-        text_parts: list[str] = []
-        tool_name: str | None = None
-        tool_input_parts: list[str] = []
-        current_tool_block_index: int | None = None
-
-        async for chunk in it:
-            chunks.append(chunk)
-            for line in chunk.splitlines():
-                if not line.startswith("data:"):
-                    continue
-                data_str = line[5:].strip()
-                try:
-                    evt = json.loads(data_str)
-                    etype = evt.get("type")
-                    if etype == "content_block_start":
-                        cb = evt.get("content_block", {})
-                        if cb.get("type") == "tool_use" and cb.get("name") in ("web_search", "web_fetch"):
-                            tool_name = cb["name"]
-                            current_tool_block_index = evt.get("index")
-                            tool_input_parts = []
-                    elif etype == "content_block_delta":
-                        delta = evt.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            text_parts.append(delta.get("text", ""))
-                        elif (
-                            delta.get("type") == "input_json_delta"
-                            and evt.get("index") == current_tool_block_index
-                        ):
-                            tool_input_parts.append(delta.get("partial_json", ""))
-                except (json.JSONDecodeError, KeyError, AttributeError):
-                    pass
-
-        tool_input: dict[str, Any] | None = None
-        if tool_name and tool_input_parts:
-            try:
-                tool_input = json.loads("".join(tool_input_parts))
-            except json.JSONDecodeError:
-                tool_name = None  # malformed tool call — treat as normal response
-
-        # Fallback: model wrote <web_search>query</web_search> as XML in text
-        if not tool_name:
-            full_text = "".join(text_parts)
-            m = re.search(r"<web_search[^>]*>(.*?)</web_search>", full_text, re.DOTALL)
-            if m:
-                tool_name = "web_search"
-                tool_input = {"query": m.group(1).strip()}
-                logger.info("UI: detected XML-style web_search tag, query={!r}", tool_input["query"])
-
-        return chunks, text_parts, tool_name, tool_input
+    # --- Proactive Tavily search ------------------------------------------------
+    # Detect real-time queries and inject Tavily results into the system prompt
+    # before the LLM call. No tool round-trip — works with any model.
+    _REALTIME_KEYWORDS = (
+        "weather", "news", "price", "score", "stock", "today", "current",
+        "latest", "now", "forecast", "temperature", "breaking", "live",
+        "match", "result", "rate", "trending", "happened", "update", "search", "find", "look up"
+    )
+    _user_text_lower = body.content.lower()
+    _needs_search = (
+        settings.tavily_api_key
+        and any(kw in _user_text_lower for kw in _REALTIME_KEYWORDS)
+    )
+    _tavily_system: str | None = None
+    if _needs_search:
+        try:
+            _results = await _tavily_search(settings.tavily_api_key, body.content)
+            if _results:
+                _snippets = "\n\n".join(
+                    f"{r['title']}\n{r['url']}\n{r.get('snippet', '')}"
+                    for r in _results
+                )
+                _tavily_system = (
+                    "The following are live web search results for the user's query. "
+                    f"Use them to answer accurately with up-to-date information:\n\n{_snippets}"
+                )
+                logger.info("UI proactive search: {} results for {!r}", len(_results), body.content[:80])
+        except Exception as _search_err:
+            logger.warning("UI proactive search failed: {}", _search_err)
+    # ---------------------------------------------------------------------------
 
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
         try:
-            _system: str | None = (
-                "You have access to web_search and web_fetch tools. "
-                "Whenever the user asks about current events, weather, news, prices, scores, "
-                "or anything that may have changed recently, you MUST call the web_search tool "
-                "with a relevant query. Do NOT output XML tags like <web_search> — use the tool_use "
-                "mechanism directly. Do NOT answer from training data alone for time-sensitive queries."
-                if injected_tools else None
-            )
             cur_request = MessagesRequest(
                 model=body.model,
                 messages=loop_messages,  # type: ignore[arg-type]
                 max_tokens=body.max_tokens,
                 stream=True,
-                system=_system,
-                tools=injected_tools,  # type: ignore[arg-type]
+                system=_tavily_system,
             )
             resp = service.create_message(cur_request)
-            first_iter: AsyncIterator[str] = resp.body_iterator  # type: ignore[union-attr]
-
-            if not injected_tools:
-                # No tools injected — stream directly without buffering.
-                async for chunk in first_iter:
-                    yield chunk
-                    for line in chunk.splitlines():
-                        if not line.startswith("data:"):
-                            continue
-                        try:
-                            evt = json.loads(line[5:].strip())
-                            if evt.get("type") == "content_block_delta":
-                                d = evt.get("delta", {})
-                                if d.get("type") == "text_delta":
-                                    text_parts.append(d.get("text", ""))
-                        except (json.JSONDecodeError, KeyError, AttributeError):
-                            pass
-            else:
-                chunks, first_text, tool_name, tool_input = await _collect_response(first_iter)
-
-                if tool_name and tool_input and settings.tavily_api_key:
-                    # Model wants to use a web tool — execute via Tavily silently.
-                    logger.info("UI agentic tool: {}", tool_name)
+            stream_iter: AsyncIterator[str] = resp.body_iterator  # type: ignore[union-attr]
+            async for chunk in stream_iter:
+                yield chunk
+                for line in chunk.splitlines():
+                    if not line.startswith("data:"):
+                        continue
                     try:
-                        if tool_name == "web_search":
-                            query = str(tool_input.get("query", ""))
-                            results = await _tavily_search(settings.tavily_api_key, query)
-                            tool_result_content = (
-                                "\n\n".join(
-                                    f"{r['title']}\n{r['url']}\n{r.get('snippet', '')}"
-                                    for r in results
-                                )
-                                or "No results found."
-                            )
-                        else:
-                            url = str(tool_input.get("url", ""))
-                            fetched = await _tavily_fetch(settings.tavily_api_key, url)
-                            tool_result_content = fetched["data"]
-                    except Exception as tool_err:
-                        logger.warning("UI agentic tool error: {}", tool_err)
-                        tool_result_content = f"Web tool failed: {type(tool_err).__name__}"
-
-                    # Append assistant tool_use + tool_result for follow-up.
-                    loop_messages.append({
-                        "role": "assistant",
-                        "content": [{"type": "tool_use", "id": "srvtoolu_ui", "name": tool_name, "input": tool_input}],
-                    })
-                    loop_messages.append({
-                        "role": "user",
-                        "content": [{"type": "tool_result", "tool_use_id": "srvtoolu_ui", "content": tool_result_content}],
-                    })
-
-                    # Second call — stream the final answer directly.
-                    follow_req = MessagesRequest(
-                        model=body.model,
-                        messages=loop_messages,  # type: ignore[arg-type]
-                        max_tokens=body.max_tokens,
-                        stream=True,
-                        system=_system,
-                        tools=injected_tools,  # type: ignore[arg-type]
-                    )
-                    follow_resp = service.create_message(follow_req)
-                    follow_iter: AsyncIterator[str] = follow_resp.body_iterator  # type: ignore[union-attr]
-
-                    async for chunk in follow_iter:
-                        yield chunk
-                        for line in chunk.splitlines():
-                            if not line.startswith("data:"):
-                                continue
-                            try:
-                                evt = json.loads(line[5:].strip())
-                                if evt.get("type") == "content_block_delta":
-                                    d = evt.get("delta", {})
-                                    if d.get("type") == "text_delta":
-                                        text_parts.append(d.get("text", ""))
-                            except (json.JSONDecodeError, KeyError, AttributeError):
-                                pass
-                else:
-                    # Normal response (no tool call) — yield buffered chunks.
-                    for chunk in chunks:
-                        yield chunk
-                    text_parts = list(first_text)
+                        evt = json.loads(line[5:].strip())
+                        if evt.get("type") == "content_block_delta":
+                            d = evt.get("delta", {})
+                            if d.get("type") == "text_delta":
+                                text_parts.append(d.get("text", ""))
+                    except (json.JSONDecodeError, KeyError, AttributeError):
+                        pass
 
         except Exception as e:
             logger.warning("UI chat stream error: {}", type(e).__name__)
