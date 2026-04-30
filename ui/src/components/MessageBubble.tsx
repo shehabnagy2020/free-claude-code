@@ -131,15 +131,15 @@ export default function MessageBubble({ message, models, onResend }: Props) {
 
   if (isUser) {
     return (
-      <div className="group flex justify-end px-4 py-2 animate-fade-in">
+      <div className="group flex justify-end px-4 py-2 animate-fade-in min-w-0">
         {lightboxSrc && (
           <ImageLightbox
             src={lightboxSrc}
             onClose={() => setLightboxSrc(null)}
           />
         )}
-        <div className="flex flex-col items-end gap-1">
-          <div className="flex items-end gap-2 max-w-[80%]">
+        <div className="flex flex-col items-end gap-1 min-w-0 max-w-[80%]">
+          <div className="flex items-end gap-2 min-w-0 w-full">
             <div className="rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white shadow-md shadow-blue-900/20">
               {images.length > 0 && (
                 <div className="mb-2 flex flex-wrap gap-1.5">
@@ -240,7 +240,7 @@ export default function MessageBubble({ message, models, onResend }: Props) {
         </div>
 
         {/* Content */}
-        <div className="message-prose min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[#1a1d25] px-4 py-3 text-sm text-surface-100 shadow">
+        <div className="message-prose min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[#1a1d25] px-4 py-3 text-sm text-surface-100 shadow break-words overflow-hidden">
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkBreaks]}
             components={{
@@ -265,6 +265,7 @@ export default function MessageBubble({ message, models, onResend }: Props) {
                         </span>
                         <CopyButton text={code} />
                       </div>
+                      <div className="overflow-x-hidden">
                       <SyntaxHighlighter
                         style={vscDarkPlus}
                         language={match[1]}
@@ -274,11 +275,14 @@ export default function MessageBubble({ message, models, onResend }: Props) {
                           background: "transparent",
                           padding: "12px 14px",
                           fontSize: "0.8125rem",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-all",
                         }}
                         {...props}
                       >
                         {code}
                       </SyntaxHighlighter>
+                      </div>
                     </div>
                   );
                 }
