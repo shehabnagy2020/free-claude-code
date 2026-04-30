@@ -18,6 +18,7 @@ from core.anthropic.server_tool_sse import (
 from core.anthropic.sse import format_sse_event
 
 from . import outbound
+from . import tavily as _tavily
 from .constants import _MAX_FETCH_CHARS
 from .egress import WebFetchEgressPolicy
 from .parsers import extract_query, extract_url
@@ -33,7 +34,11 @@ def _search_summary(query: str, results: list[dict[str, str]]) -> str:
         return f"No web search results found for: {query}"
     lines = [f"Search results for: {query}"]
     for index, result in enumerate(results, start=1):
-        lines.append(f"{index}. {result['title']}\n{result['url']}")
+        snippet = result.get("snippet", "")
+        entry = f"{index}. {result['title']}\n{result['url']}"
+        if snippet:
+            entry += f"\n{snippet}"
+        lines.append(entry)
     return "\n\n".join(lines)
 
 
@@ -43,6 +48,7 @@ async def stream_web_server_tool_response(
     *,
     web_fetch_egress: WebFetchEgressPolicy,
     verbose_client_errors: bool = False,
+    tavily_mcp_url: str = "",
 ) -> AsyncIterator[str]:
     """Stream a minimal Anthropic-shaped turn for forced `web_search` / `web_fetch` (local fallback).
 
@@ -109,7 +115,11 @@ async def stream_web_server_tool_response(
     try:
         if tool_name == "web_search":
             query = str(tool_input["query"])
-            results = await outbound._run_web_search(query)
+            if not tavily_mcp_url:
+                raise RuntimeError(
+                    "TAVILY_MCP_URL is not configured. Set it in your .env to enable web search."
+                )
+            results = await _tavily.tavily_search(tavily_mcp_url, query)
             result_content: Any = [
                 {
                     "type": "web_search_result",
@@ -121,8 +131,12 @@ async def stream_web_server_tool_response(
             summary = _search_summary(query, results)
             result_block_type = WEB_SEARCH_TOOL_RESULT
         else:
-            fetched = await outbound._run_web_fetch(
-                str(tool_input["url"]), web_fetch_egress
+            if not tavily_mcp_url:
+                raise RuntimeError(
+                    "TAVILY_MCP_URL is not configured. Set it in your .env to enable web fetch."
+                )
+            fetched = await _tavily.tavily_fetch(
+                tavily_mcp_url, str(tool_input["url"])
             )
             result_content = {
                 "type": "web_fetch_result",

@@ -198,6 +198,10 @@ class Settings(BaseSettings):
     enable_web_server_tools: bool = Field(
         default=False, validation_alias="ENABLE_WEB_SERVER_TOOLS"
     )
+    # Optional Tavily MCP URL (https://mcp.tavily.com/mcp/?tavilyApiKey=...).
+    # When set, web_search uses Tavily MCP instead of DuckDuckGo, and web_fetch
+    # uses Tavily's extract tool instead of a raw HTTP fetch.
+    tavily_mcp_url: str = Field(default="", validation_alias="TAVILY_MCP_URL")
     # Comma-separated URL schemes allowed for web_fetch (default: http,https).
     web_fetch_allowed_schemes: str = Field(
         default="http,https", validation_alias="WEB_FETCH_ALLOWED_SCHEMES"
@@ -392,6 +396,13 @@ class Settings(BaseSettings):
             supported = ", ".join(f"'{p}'" for p in SUPPORTED_PROVIDER_IDS)
             raise ValueError(f"Invalid provider: '{provider}'. Supported: {supported}")
         return v
+
+    @model_validator(mode="after")
+    def auto_enable_web_tools_for_tavily(self) -> "Settings":
+        """Auto-enable web server tools when a Tavily MCP URL is configured."""
+        if self.tavily_mcp_url and not self.enable_web_server_tools:
+            self.enable_web_server_tools = True
+        return self
 
     @model_validator(mode="after")
     def check_nvidia_nim_api_key(self) -> Settings:

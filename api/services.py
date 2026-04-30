@@ -27,6 +27,7 @@ from .web_tools.egress import WebFetchEgressPolicy
 from .web_tools.request import (
     is_web_server_tool_request,
     openai_chat_upstream_server_tool_error,
+    strip_server_tools,
 )
 from .web_tools.streaming import stream_web_server_tool_response
 
@@ -134,6 +135,7 @@ class ClaudeProxyService:
                         input_tokens=input_tokens,
                         web_fetch_egress=egress,
                         verbose_client_errors=self._settings.log_api_error_tracebacks,
+                        tavily_mcp_url=self._settings.tavily_mcp_url,
                     ),
                 )
 
@@ -142,9 +144,13 @@ class ClaudeProxyService:
                 return optimized
             logger.debug("No optimization matched, routing to provider")
 
+            # Strip Anthropic server tool definitions (web_search / web_fetch) before
+            # forwarding — providers never handle these; the proxy does.
+            forward_request = strip_server_tools(routed.request)
+
             provider = self._provider_getter(routed.resolved.provider_id)
             provider.preflight_stream(
-                routed.request,
+                forward_request,
                 thinking_enabled=routed.resolved.thinking_enabled,
             )
 
@@ -152,20 +158,20 @@ class ClaudeProxyService:
             logger.info(
                 "API_REQUEST: request_id={} model={} messages={}",
                 request_id,
-                routed.request.model,
-                len(routed.request.messages),
+                forward_request.model,
+                len(forward_request.messages),
             )
             if self._settings.log_raw_api_payloads:
                 logger.debug(
-                    "FULL_PAYLOAD [{}]: {}", request_id, routed.request.model_dump()
+                    "FULL_PAYLOAD [{}]: {}", request_id, forward_request.model_dump()
                 )
 
             input_tokens = self._token_counter(
-                routed.request.messages, routed.request.system, routed.request.tools
+                forward_request.messages, forward_request.system, forward_request.tools
             )
             return anthropic_sse_streaming_response(
                 provider.stream_response(
-                    routed.request,
+                    forward_request,
                     input_tokens=input_tokens,
                     request_id=request_id,
                     thinking_enabled=routed.resolved.thinking_enabled,

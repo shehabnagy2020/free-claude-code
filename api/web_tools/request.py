@@ -66,22 +66,49 @@ def has_listed_anthropic_server_tools(request: MessagesRequest) -> bool:
     return any(is_anthropic_server_tool_definition(t) for t in (request.tools or []))
 
 
+def strip_server_tools(request: MessagesRequest) -> MessagesRequest:
+    """Return a copy of *request* with Anthropic server tool definitions removed.
+
+    Providers (NVIDIA NIM, OpenRouter, Ollama, etc.) do not support
+    ``web_search`` / ``web_fetch`` tool definitions — those are handled
+    proxy-side.  Stripping them prevents upstream 4xx errors and avoids
+    leaking proxy implementation details to the provider.
+
+    Also clears ``tool_choice`` when it was forcing one of the stripped tools,
+    so the provider does not receive a ``tool_choice`` that references a
+    non-existent tool.
+    """
+    tools = request.tools or []
+    kept = [t for t in tools if not is_anthropic_server_tool_definition(t)]
+    changed = len(kept) != len(tools)
+
+    tc = request.tool_choice
+    if tc and forced_server_tool_name(request) is not None:
+        tc = None
+        changed = True
+
+    if not changed:
+        return request
+
+    data = request.model_dump()
+    data["tools"] = [t.model_dump() for t in kept] if kept else None
+    data["tool_choice"] = tc
+    return MessagesRequest(**data)
+
+
 def openai_chat_upstream_server_tool_error(
     request: MessagesRequest, *, web_tools_enabled: bool
 ) -> str | None:
-    """Return a user-facing error when OpenAI Chat upstream cannot satisfy server-tool semantics."""
+    """Return a user-facing error when OpenAI Chat upstream cannot satisfy server-tool semantics.
+
+    Only errors when tool_choice *forces* a server tool but web tools are disabled.
+    Listed-but-not-forced server tools are silently stripped by strip_server_tools().
+    """
     forced = forced_server_tool_name(request)
     if forced and not web_tools_enabled:
         return (
             f"tool_choice forces Anthropic server tool {forced!r}, but local web server tools are "
-            "disabled (ENABLE_WEB_SERVER_TOOLS=false). Enable them or use a native Anthropic "
-            "Messages transport (e.g. open_router, ollama, lmstudio)."
-        )
-    if not forced and has_listed_anthropic_server_tools(request):
-        return (
-            "OpenAI Chat upstreams (NVIDIA NIM) cannot use listed Anthropic server tools "
-            "(web_search / web_fetch) without the local web server tool handler. Use a native "
-            "Anthropic transport, set ENABLE_WEB_SERVER_TOOLS=true and force the tool with "
-            "tool_choice, or remove these tools from the request."
+            "disabled (ENABLE_WEB_SERVER_TOOLS=false). "
+            "Set TAVILY_MCP_URL and ENABLE_WEB_SERVER_TOOLS=true in your .env to enable them."
         )
     return None

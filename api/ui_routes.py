@@ -18,6 +18,8 @@ from config.settings import get_settings
 from .dependencies import resolve_provider
 from .models.anthropic import MessagesRequest
 from .services import ClaudeProxyService
+from .web_tools.tavily import tavily_fetch as _tavily_fetch
+from .web_tools.tavily import tavily_search as _tavily_search
 from .ui_db import UIChatDB
 
 ui_router = APIRouter(prefix="/ui/api")
@@ -261,42 +263,172 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
 
     # Build the MessagesRequest and call the service in-process (no HTTP loopback)
     settings = get_settings()
-    messages_request = MessagesRequest(
-        model=body.model,
-        messages=api_messages,  # type: ignore[arg-type]
-        max_tokens=body.max_tokens,
-        stream=True,
-    )
+
+    # Inject web_search / web_fetch tools when Tavily is configured so the model
+    # can use them naturally without the caller forcing tool_choice.
+    _WEB_TOOLS: list[dict[str, Any]] = [
+        {
+            "name": "web_search",
+            "type": "web_search_20250305",
+            "description": "Search the web for current information.",
+        },
+        {
+            "name": "web_fetch",
+            "type": "web_fetch_20250305",
+            "description": "Fetch and read the content of a URL.",
+        },
+    ]
+    injected_tools = _WEB_TOOLS if settings.tavily_mcp_url else None
+
     service = ClaudeProxyService(
         settings,
         provider_getter=lambda pt: resolve_provider(pt, app=request.app, settings=settings),
     )
 
-    # create_message() returns a StreamingResponse; extract its body iterator
-    provider_resp = service.create_message(messages_request)
-    provider_iter: AsyncIterator[str] = provider_resp.body_iterator  # type: ignore[union-attr]
-
     session_id = body.session_id
+    # Keep a mutable reference to the current messages list so the agentic loop
+    # can append tool_result turns without touching the outer api_messages list.
+    loop_messages: list[dict[str, Any]] = list(api_messages)
+
+    async def _collect_response(
+        it: AsyncIterator[str],
+    ) -> tuple[list[str], list[str], str | None, dict[str, Any] | None]:
+        """Drain *it*, return (chunks, text_parts, tool_name, tool_input)."""
+        chunks: list[str] = []
+        text_parts: list[str] = []
+        tool_name: str | None = None
+        tool_input_parts: list[str] = []
+        current_tool_block_index: int | None = None
+
+        async for chunk in it:
+            chunks.append(chunk)
+            for line in chunk.splitlines():
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                try:
+                    evt = json.loads(data_str)
+                    etype = evt.get("type")
+                    if etype == "content_block_start":
+                        cb = evt.get("content_block", {})
+                        if cb.get("type") == "tool_use" and cb.get("name") in ("web_search", "web_fetch"):
+                            tool_name = cb["name"]
+                            current_tool_block_index = evt.get("index")
+                            tool_input_parts = []
+                    elif etype == "content_block_delta":
+                        delta = evt.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text_parts.append(delta.get("text", ""))
+                        elif (
+                            delta.get("type") == "input_json_delta"
+                            and evt.get("index") == current_tool_block_index
+                        ):
+                            tool_input_parts.append(delta.get("partial_json", ""))
+                except (json.JSONDecodeError, KeyError, AttributeError):
+                    pass
+
+        tool_input: dict[str, Any] | None = None
+        if tool_name and tool_input_parts:
+            try:
+                tool_input = json.loads("".join(tool_input_parts))
+            except json.JSONDecodeError:
+                tool_name = None  # malformed tool call — treat as normal response
+
+        return chunks, text_parts, tool_name, tool_input
 
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
         try:
-            async for chunk in provider_iter:
-                yield chunk
-                # Chunks are multi-line SSE: "event: ...\ndata: {...}\n\n"
-                # Find the data line within the chunk.
-                for line in chunk.splitlines():
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line[5:].strip()
+            cur_request = MessagesRequest(
+                model=body.model,
+                messages=loop_messages,  # type: ignore[arg-type]
+                max_tokens=body.max_tokens,
+                stream=True,
+                tools=injected_tools,  # type: ignore[arg-type]
+            )
+            resp = service.create_message(cur_request)
+            first_iter: AsyncIterator[str] = resp.body_iterator  # type: ignore[union-attr]
+
+            if not injected_tools:
+                # No tools injected — stream directly without buffering.
+                async for chunk in first_iter:
+                    yield chunk
+                    for line in chunk.splitlines():
+                        if not line.startswith("data:"):
+                            continue
+                        try:
+                            evt = json.loads(line[5:].strip())
+                            if evt.get("type") == "content_block_delta":
+                                d = evt.get("delta", {})
+                                if d.get("type") == "text_delta":
+                                    text_parts.append(d.get("text", ""))
+                        except (json.JSONDecodeError, KeyError, AttributeError):
+                            pass
+            else:
+                chunks, first_text, tool_name, tool_input = await _collect_response(first_iter)
+
+                if tool_name and tool_input and settings.tavily_mcp_url:
+                    # Model wants to use a web tool — execute via Tavily silently.
+                    logger.info("UI agentic tool: {}", tool_name)
                     try:
-                        evt = json.loads(data_str)
-                        if evt.get("type") == "content_block_delta":
-                            delta = evt.get("delta", {})
-                            if delta.get("type") == "text_delta":
-                                text_parts.append(delta.get("text", ""))
-                    except (json.JSONDecodeError, KeyError, AttributeError):
-                        pass
+                        if tool_name == "web_search":
+                            query = str(tool_input.get("query", ""))
+                            results = await _tavily_search(settings.tavily_mcp_url, query)
+                            tool_result_content = (
+                                "\n\n".join(
+                                    f"{r['title']}\n{r['url']}\n{r.get('snippet', '')}"
+                                    for r in results
+                                )
+                                or "No results found."
+                            )
+                        else:
+                            url = str(tool_input.get("url", ""))
+                            fetched = await _tavily_fetch(settings.tavily_mcp_url, url)
+                            tool_result_content = fetched["data"]
+                    except Exception as tool_err:
+                        logger.warning("UI agentic tool error: {}", tool_err)
+                        tool_result_content = f"Web tool failed: {type(tool_err).__name__}"
+
+                    # Append assistant tool_use + tool_result for follow-up.
+                    loop_messages.append({
+                        "role": "assistant",
+                        "content": [{"type": "tool_use", "id": "srvtoolu_ui", "name": tool_name, "input": tool_input}],
+                    })
+                    loop_messages.append({
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "srvtoolu_ui", "content": tool_result_content}],
+                    })
+
+                    # Second call — stream the final answer directly.
+                    follow_req = MessagesRequest(
+                        model=body.model,
+                        messages=loop_messages,  # type: ignore[arg-type]
+                        max_tokens=body.max_tokens,
+                        stream=True,
+                        tools=injected_tools,  # type: ignore[arg-type]
+                    )
+                    follow_resp = service.create_message(follow_req)
+                    follow_iter: AsyncIterator[str] = follow_resp.body_iterator  # type: ignore[union-attr]
+
+                    async for chunk in follow_iter:
+                        yield chunk
+                        for line in chunk.splitlines():
+                            if not line.startswith("data:"):
+                                continue
+                            try:
+                                evt = json.loads(line[5:].strip())
+                                if evt.get("type") == "content_block_delta":
+                                    d = evt.get("delta", {})
+                                    if d.get("type") == "text_delta":
+                                        text_parts.append(d.get("text", ""))
+                            except (json.JSONDecodeError, KeyError, AttributeError):
+                                pass
+                else:
+                    # Normal response (no tool call) — yield buffered chunks.
+                    for chunk in chunks:
+                        yield chunk
+                    text_parts = list(first_text)
+
         except Exception as e:
             logger.warning("UI chat stream error: {}", type(e).__name__)
             if not text_parts:
