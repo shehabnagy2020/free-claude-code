@@ -39,6 +39,13 @@ interface Props {
 }
 
 function TypingIndicator() {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <div className="flex justify-start px-4 py-2">
       <div className="flex items-start gap-2.5">
@@ -58,11 +65,21 @@ function TypingIndicator() {
           </svg>
         </div>
         <div className="rounded-2xl rounded-tl-sm bg-[#1a1d25] px-5 py-4 shadow">
-          <span className="flex items-center gap-2">
+          <span className="flex items-center gap-2.5">
             <span className="typing-dot" />
             <span className="typing-dot" />
             <span className="typing-dot" />
+            {elapsed >= 5 && (
+              <span className="ml-1 text-xs text-surface-500 tabular-nums">
+                {elapsed}s
+              </span>
+            )}
           </span>
+          {elapsed >= 15 && (
+            <p className="mt-2 text-xs text-surface-500">
+              Still working on it…
+            </p>
+          )}
         </div>
       </div>
     </div>

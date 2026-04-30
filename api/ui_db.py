@@ -156,6 +156,43 @@ class UIChatDB:
             ) as cursor:
                 return (await cursor.fetchone()) is not None
 
+    async def get_history_for_chat(
+        self, session_id: str
+    ) -> list[dict[str, Any]] | None:
+        """Return message history in one query, or None if session doesn't exist."""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Single query: LEFT JOIN so we get a row even when messages are empty.
+            # The sessions row lets us distinguish missing-session vs empty-session.
+            async with db.execute(
+                """
+                SELECT s.id AS _sid, m.id, m.session_id, m.role, m.content, m.created_at
+                FROM sessions s
+                LEFT JOIN messages m ON m.session_id = s.id
+                WHERE s.id = ?
+                ORDER BY m.created_at ASC
+                """,
+                (session_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        if not rows:
+            return None  # session doesn't exist
+        # LEFT JOIN may produce a single row with m.id = NULL (empty session)
+        return [
+            _message_to_dict(row)
+            for row in rows
+            if row["id"] is not None
+        ]
+
+    async def get_session_title(self, session_id: str) -> str | None:
+        """Return the session title, or None if not found."""
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT title FROM sessions WHERE id = ?", (session_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        return row[0] if row else None
+
     # ── Messages ──────────────────────────────────────────────────────────────
 
     async def get_messages(self, session_id: str) -> list[dict[str, Any]]:

@@ -8,7 +8,6 @@ import json
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -16,6 +15,9 @@ from pydantic import BaseModel
 
 from config.settings import get_settings
 
+from .dependencies import resolve_provider
+from .models.anthropic import MessagesRequest
+from .services import ClaudeProxyService
 from .ui_db import UIChatDB
 
 ui_router = APIRouter(prefix="/ui/api")
@@ -203,14 +205,15 @@ async def get_messages(session_id: str, _: Token, db: DB) -> list[dict[str, Any]
 @ui_router.post("/chat")
 async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> StreamingResponse:
     """
-    Stream a response from the provider via the local /v1/messages endpoint.
+    Stream a response from the provider in-process (no HTTP loopback).
     Saves user + assistant messages to the DB around the stream.
     """
-    if not await db.session_exists(body.session_id):
+    # Single DB round-trip: session check + history fetch combined
+    history = await db.get_history_for_chat(body.session_id)
+    if history is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Build Anthropic content blocks for this user turn.
-    # If images are attached, content is a list of blocks; otherwise plain text.
+    # Build user content for API and DB
     if body.images:
         user_blocks: list[dict[str, Any]] = []
         for img in body.images:
@@ -225,18 +228,15 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         if body.content.strip():
             user_blocks.append({"type": "text", "text": body.content})
         user_content_for_api: list[dict[str, Any]] | str = user_blocks
-        # Persist as JSON so the frontend can render image thumbnails from history
         user_content_for_db = json.dumps(user_blocks)
     else:
         user_content_for_api = body.content
         user_content_for_db = body.content
 
-    # Save user message to DB
+    # Save user message. Also bumps sessions.updated_at.
     await db.add_message(body.session_id, "user", user_content_for_db)
 
-    # Build full history for the API request.
-    # Messages stored as JSON arrays are passed as structured content blocks;
-    # plain strings are passed as-is.
+    # Build messages list: prior history + new user turn (no extra DB fetch needed)
     def _parse_content(raw: str) -> list[dict[str, Any]] | str:
         if raw.startswith("["):
             try:
@@ -245,108 +245,62 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                 pass
         return raw
 
-    history = await db.get_messages(body.session_id)
-    messages = [{"role": m["role"], "content": _parse_content(m["content"])} for m in history]
+    api_messages: list[dict[str, Any]] = [
+        {"role": m["role"], "content": _parse_content(m["content"])} for m in history
+    ]
+    api_messages.append({"role": "user", "content": user_content_for_api})
 
+    # Build the MessagesRequest and call the service in-process (no HTTP loopback)
     settings = get_settings()
-    port = settings.port
-    api_url = f"http://127.0.0.1:{port}/v1/messages"
+    messages_request = MessagesRequest(
+        model=body.model,
+        messages=api_messages,  # type: ignore[arg-type]
+        max_tokens=body.max_tokens,
+        stream=True,
+    )
+    service = ClaudeProxyService(
+        settings,
+        provider_getter=lambda pt: resolve_provider(pt, app=request.app, settings=settings),
+    )
 
-    headers: dict[str, str] = {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-    }
-    if settings.anthropic_auth_token:
-        headers["x-api-key"] = settings.anthropic_auth_token
-
-    payload: dict[str, Any] = {
-        "model": body.model,
-        "messages": messages,
-        "stream": True,
-        "max_tokens": body.max_tokens,
-    }
+    # create_message() returns a StreamingResponse; extract its body iterator
+    provider_resp = service.create_message(messages_request)
+    provider_iter: AsyncIterator[str] = provider_resp.body_iterator  # type: ignore[union-attr]
 
     session_id = body.session_id
     user_text_for_title = body.content.strip() or "🖼️ Image"
 
-    _MAX_BACKEND_RETRIES = 2
-
     async def _stream_and_save() -> AsyncIterator[str]:
-        import asyncio as _asyncio
-
         text_parts: list[str] = []
         try:
-            for attempt in range(_MAX_BACKEND_RETRIES + 1):
-                try:
-                    async with httpx.AsyncClient(
-                        timeout=httpx.Timeout(300.0, connect=15.0),
-                        limits=httpx.Limits(keepalive_expiry=30.0),
-                    ) as client:
-                        async with client.stream(
-                            "POST", api_url, json=payload, headers=headers
-                        ) as resp:
-                            # Retry on 5xx before any content
-                            if resp.status_code >= 500 and attempt < _MAX_BACKEND_RETRIES:
-                                logger.warning(
-                                    "UI chat: /v1/messages returned {} on attempt {}, retrying",
-                                    resp.status_code, attempt + 1,
-                                )
-                                await _asyncio.sleep(1.0 * (attempt + 1))
-                                continue
-                            if resp.status_code >= 400:
-                                body_text = await resp.aread()
-                                detail = body_text.decode(errors="replace")[:200]
-                                logger.warning("UI chat: upstream error {}: {}", resp.status_code, detail)
-                                yield f"data: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"Upstream error {resp.status_code}\"}}}}\n\n"
-                                return
-
-                            async for raw_line in resp.aiter_lines():
-                                yield (raw_line + "\n") if raw_line else "\n"
-                                if raw_line.startswith("data:"):
-                                    data_str = raw_line[5:].strip()
-                                    try:
-                                        evt = json.loads(data_str)
-                                        if evt.get("type") == "content_block_delta":
-                                            delta = evt.get("delta", {})
-                                            if delta.get("type") == "text_delta":
-                                                text_parts.append(delta.get("text", ""))
-                                    except (json.JSONDecodeError, KeyError, AttributeError):
-                                        pass
-                    # Stream completed successfully – exit retry loop
-                    break
-
-                except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-                    logger.warning(
-                        "UI chat: connect error attempt {}/{}: {}",
-                        attempt + 1, _MAX_BACKEND_RETRIES + 1, type(e).__name__,
-                    )
-                    if attempt < _MAX_BACKEND_RETRIES:
-                        await _asyncio.sleep(1.0 * (attempt + 1))
-                        continue
-                    yield "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Could not reach provider – please retry\"}}\n\n"
-
-                except Exception as e:
-                    if text_parts:
-                        logger.warning("UI chat stream dropped after content: {}", type(e).__name__)
-                    else:
-                        logger.warning("UI chat stream error: {}", type(e).__name__)
-                        yield "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Stream interrupted – please retry\"}}\n\n"
-                    break
-
+            async for chunk in provider_iter:
+                yield chunk
+                if chunk.startswith("data:"):
+                    data_str = chunk[5:].strip()
+                    try:
+                        evt = json.loads(data_str)
+                        if evt.get("type") == "content_block_delta":
+                            delta = evt.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                text_parts.append(delta.get("text", ""))
+                    except (json.JSONDecodeError, KeyError, AttributeError):
+                        pass
+        except Exception as e:
+            logger.warning("UI chat stream error: {}", type(e).__name__)
+            if not text_parts:
+                yield '{"type":"error","error":{"type":"api_error","message":"Stream interrupted – please retry"}}\n\n'
         finally:
             full_text = "".join(text_parts)
             if full_text:
                 try:
                     await db.add_message(session_id, "assistant", full_text)
-                    # Auto-title: set title from first user message if still 'New Chat'
-                    sessions = await db.list_sessions()
-                    for s in sessions:
-                        if s["id"] == session_id and s["title"] == "New Chat":
-                            new_title = user_text_for_title[:60].replace("\n", " ")
-                            if len(user_text_for_title) > 60:
-                                new_title += "…"
-                            await db.update_session(session_id, title=new_title)
-                            break
+                    # Auto-title: lightweight single-row query
+                    current_title = await db.get_session_title(session_id)
+                    if current_title == "New Chat":
+                        new_title = user_text_for_title[:60].replace("\n", " ")
+                        if len(user_text_for_title) > 60:
+                            new_title += "…"
+                        await db.update_session(session_id, title=new_title)
                 except Exception as save_err:
                     logger.warning(
                         "UI: failed to persist assistant message: {}",
