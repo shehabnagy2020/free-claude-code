@@ -48,8 +48,8 @@ export default {
           to: { transform: "translateX(0)" },
         },
         pulseDot: {
-          "0%, 80%, 100%": { opacity: "0.2", transform: "scale(0.8)" },
-          "40%": { opacity: "1", transform: "scale(1)" },
+          "0%, 100%": { opacity: "0.3", transform: "scale(0.75)" },
+          "50%": { opacity: "1", transform: "scale(1.2)" },
         },
       },
     },

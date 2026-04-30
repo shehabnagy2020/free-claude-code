@@ -57,17 +57,11 @@ function TypingIndicator() {
             />
           </svg>
         </div>
-        <div className="rounded-2xl rounded-tl-sm bg-[#1a1d25] px-4 py-3 text-sm text-surface-300 shadow">
-          <span className="flex gap-1">
-            <span className="typing-dot" style={{ animationDelay: "0ms" }}>
-              ●
-            </span>
-            <span className="typing-dot" style={{ animationDelay: "180ms" }}>
-              ●
-            </span>
-            <span className="typing-dot" style={{ animationDelay: "360ms" }}>
-              ●
-            </span>
+        <div className="rounded-2xl rounded-tl-sm bg-[#1a1d25] px-5 py-4 shadow">
+          <span className="flex items-center gap-2">
+            <span className="typing-dot" />
+            <span className="typing-dot" />
+            <span className="typing-dot" />
           </span>
         </div>
       </div>
