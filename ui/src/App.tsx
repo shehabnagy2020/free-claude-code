@@ -217,15 +217,35 @@ export default function App() {
             setStreamingText(accText);
           },
           onDone: async () => {
-            // Fetch canonical messages first, then clear streaming state.
-            // React 18 batches all three setters into one render so there's
-            // no flash where the streaming bubble disappears before the real message appears.
-            const msgs = await api.fetchMessages(token, activeSessionId);
-            setMessages(msgs);
+            // Optimistically append the accumulated assistant response so the
+            // message is visible immediately — no race with the backend DB write.
+            const assistantMsg: Message = {
+              id: `streamed-${Date.now()}`,
+              session_id: activeSessionId!,
+              role: "assistant",
+              content: accText,
+              created_at: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, assistantMsg]);
             setIsStreaming(false);
             setStreamingText("");
-            // Refresh session list (title + updated_at may have changed)
             void loadSessions();
+            // Background sync: replace optimistic message with canonical DB rows.
+            // Retry up to 3 times (300 ms apart) to handle the race between the
+            // SSE stream ending and the backend finally-block completing its INSERT.
+            for (let attempt = 0; attempt < 3; attempt++) {
+              await new Promise<void>((r) => setTimeout(r, 300));
+              try {
+                const msgs = await api.fetchMessages(token, activeSessionId);
+                // Only replace once the assistant message has been persisted.
+                if (msgs[msgs.length - 1]?.role === "assistant") {
+                  setMessages(msgs);
+                  break;
+                }
+              } catch {
+                break;
+              }
+            }
           },
           onError: (msg) => {
             setIsStreaming(false);
