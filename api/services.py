@@ -110,7 +110,23 @@ class ClaudeProxyService:
         try:
             _require_non_empty_messages(request_data.messages)
 
+            logger.info(
+                "[1/6] REQUEST received: model={} messages={} tools={} tool_choice={}",
+                request_data.model,
+                len(request_data.messages),
+                [t.name for t in (request_data.tools or [])],
+                request_data.tool_choice,
+            )
+
             routed = self._model_router.resolve_messages_request(request_data)
+            logger.info(
+                "[2/6] ROUTED: original={} provider={} provider_model={} thinking={}",
+                routed.resolved.original_model,
+                routed.resolved.provider_id,
+                routed.resolved.provider_model,
+                routed.resolved.thinking_enabled,
+            )
+
             if routed.resolved.provider_id in _OPENAI_CHAT_UPSTREAM_IDS:
                 tool_err = openai_chat_upstream_server_tool_error(
                     routed.request,
@@ -121,6 +137,12 @@ class ClaudeProxyService:
 
             # ----- Web server tool handling (web_search / web_fetch) -----
             web_tools_listed = has_listed_anthropic_server_tools(routed.request)
+            logger.info(
+                "[3/6] WEB_TOOLS: listed={} enabled={} is_forced={}",
+                web_tools_listed,
+                self._settings.enable_web_server_tools,
+                is_web_server_tool_request(routed.request),
+            )
 
             if web_tools_listed and self._settings.enable_web_server_tools:
                 if is_web_server_tool_request(routed.request):
@@ -131,8 +153,10 @@ class ClaudeProxyService:
                         routed.request.tools,
                     )
                     logger.info(
-                        "Optimization: Handling forced web server tool via Tavily key_set={}",
+                        "[4/6] TAVILY forced web tool: tool={} key_set={} input_tokens={}",
+                        routed.request.tool_choice,
                         bool(self._settings.tavily_api_key),
+                        input_tokens,
                     )
                     egress = WebFetchEgressPolicy(
                         allow_private_network_targets=self._settings.web_fetch_allow_private_networks,
@@ -151,15 +175,25 @@ class ClaudeProxyService:
                 # normal provider routing. strip_server_tools() will remove the
                 # server tool definitions below. The CLI will issue a separate
                 # forced tool_choice request when it decides to search.
+                logger.info("[4/6] WEB_TOOLS listed but not forced — stripping and routing to provider")
 
             optimized = try_optimizations(routed.request, self._settings)
             if optimized is not None:
+                logger.info("[4/6] OPTIMIZATION matched, returning fast-path response")
                 return optimized
-            logger.debug("No optimization matched, routing to provider")
+            logger.info("[4/6] No optimization matched, routing to provider")
 
             # Strip Anthropic server tool definitions (web_search / web_fetch) before
             # forwarding — providers never handle these; the proxy does.
             forward_request = strip_server_tools(routed.request)
+            stripped_tools = [t.name for t in (forward_request.tools or [])]
+            logger.info(
+                "[5/6] FORWARD: provider={} model={} messages={} tools={}",
+                routed.resolved.provider_id,
+                forward_request.model,
+                len(forward_request.messages),
+                stripped_tools,
+            )
 
             provider = self._provider_getter(routed.resolved.provider_id)
             provider.preflight_stream(
@@ -169,7 +203,7 @@ class ClaudeProxyService:
 
             request_id = f"req_{uuid.uuid4().hex[:12]}"
             logger.info(
-                "API_REQUEST: request_id={} model={} messages={}",
+                "[6/6] STREAMING request_id={} model={} messages={}",
                 request_id,
                 forward_request.model,
                 len(forward_request.messages),

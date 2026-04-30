@@ -43,10 +43,12 @@ class ModelRouter:
         thinking_enabled = self._settings.resolve_thinking(claude_model_name)
         provider_id = Settings.parse_provider_type(provider_model_ref)
         provider_model = Settings.parse_model_name(provider_model_ref)
-        if provider_model != claude_model_name:
-            logger.debug(
-                "MODEL MAPPING: '{}' -> '{}'", claude_model_name, provider_model
-            )
+        logger.info(
+            "MODEL MAPPING: '{}' -> provider={} model='{}'",
+            claude_model_name,
+            provider_id,
+            provider_model,
+        )
         return ResolvedModel(
             original_model=claude_model_name,
             provider_id=provider_id,
