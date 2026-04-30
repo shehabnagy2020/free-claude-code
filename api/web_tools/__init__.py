@@ -5,6 +5,7 @@ from .egress import (
     WebFetchEgressViolation,
     enforce_web_fetch_egress,
 )
+from .enrichment import enrich_empty_tool_results
 from .request import (
     convert_server_tools_to_regular,
     has_agent_web_tools,
@@ -19,6 +20,7 @@ __all__ = [
     "WebFetchEgressPolicy",
     "WebFetchEgressViolation",
     "convert_server_tools_to_regular",
+    "enrich_empty_tool_results",
     "enforce_web_fetch_egress",
     "has_agent_web_tools",
     "has_listed_anthropic_server_tools",

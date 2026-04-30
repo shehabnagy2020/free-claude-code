@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import traceback
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Any
 
 from fastapi import HTTPException
@@ -24,6 +24,8 @@ from .models.anthropic import MessagesRequest, TokenCountRequest
 from .models.responses import TokenCountResponse
 from .optimization_handlers import try_optimizations
 from .web_tools.egress import WebFetchEgressPolicy
+from .web_tools.enrichment import enrich_empty_tool_results
+from .web_tools.enrichment import enrich_empty_tool_results
 from .web_tools.request import (
     has_agent_web_tools,
     has_listed_anthropic_server_tools,
@@ -32,7 +34,7 @@ from .web_tools.request import (
     openai_chat_upstream_server_tool_error,
     strip_server_tools,
 )
-from .web_tools.streaming import stream_web_server_tool_response, stream_with_web_tool_interception
+from .web_tools.streaming import stream_web_server_tool_response
 
 TokenCounter = Callable[[list[Any], str | list[Any] | None, list[Any] | None], int]
 
@@ -43,6 +45,26 @@ ProviderGetter = Callable[[str], BaseProvider]
 _OPENAI_CHAT_UPSTREAM_IDS = frozenset(
     pid for pid, d in PROVIDER_CATALOG.items() if d.transport_type == "openai_chat"
 )
+
+
+async def _enriched_stream(
+    request: MessagesRequest,
+    *,
+    provider: BaseProvider,
+    input_tokens: int,
+    request_id: str,
+    thinking_enabled: bool,
+    tavily_api_key: str,
+) -> AsyncGenerator[str, None]:
+    """Enrich empty WebSearch/WebFetch tool_results via Tavily then stream from provider."""
+    enriched = await enrich_empty_tool_results(request, tavily_api_key=tavily_api_key)
+    async for chunk in provider.stream_response(
+        enriched,
+        input_tokens=input_tokens,
+        request_id=request_id,
+        thinking_enabled=thinking_enabled,
+    ):
+        yield chunk
 
 
 def anthropic_sse_streaming_response(
@@ -233,20 +255,23 @@ class ClaudeProxyService:
             input_tokens = self._token_counter(
                 forward_request.messages, forward_request.system, forward_request.tools
             )
-            provider_stream = provider.stream_response(
-                forward_request,
-                input_tokens=input_tokens,
-                request_id=request_id,
-                thinking_enabled=routed.resolved.thinking_enabled,
-            )
-            # Intercept tool_use blocks for WebSearch / WebFetch (Claude Code agent tools)
-            # and execute them via Tavily so the model gets real results.
+            # Enrich empty WebSearch/WebFetch tool_results with Tavily data before
+            # the model sees them — does nothing if no empty results are present.
             if agent_web_tools and self._settings.enable_web_server_tools:
-                logger.info("[6b] Wrapping stream with web_tool_interception (agent tools)")
-                provider_stream = stream_with_web_tool_interception(
-                    provider_stream,
+                provider_stream: AsyncIterator[str] = _enriched_stream(
+                    forward_request,
+                    provider=provider,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    thinking_enabled=routed.resolved.thinking_enabled,
                     tavily_api_key=self._settings.tavily_api_key,
-                    verbose_client_errors=self._settings.log_api_error_tracebacks,
+                )
+            else:
+                provider_stream = provider.stream_response(
+                    forward_request,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    thinking_enabled=routed.resolved.thinking_enabled,
                 )
             return anthropic_sse_streaming_response(provider_stream)
 
