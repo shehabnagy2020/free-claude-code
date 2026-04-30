@@ -314,7 +314,22 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     _tavily_system: str | None = None
     if _needs_search:
         try:
-            _results = await _tavily_search(settings.tavily_api_key, body.content)
+            # Build a context-aware query: for follow-up messages (e.g. "and this week?")
+            # prepend the last assistant reply summary so Tavily knows the topic/location.
+            _tavily_query = body.content
+            if history:
+                # Grab the last user turn from history to give Tavily location/topic context.
+                _prev_parts: list[str] = []
+                for _msg in reversed(history[-4:]):
+                    if _msg["role"] == "user":
+                        _prev_text = _msg["content"] if isinstance(_msg["content"], str) else ""
+                        if _prev_text.strip():
+                            _prev_parts.append(_prev_text.strip())
+                        break
+                if _prev_parts and len(body.content.split()) <= 8:
+                    # Short follow-up — prepend prior user context
+                    _tavily_query = f"{_prev_parts[0]} {body.content}"
+            _results = await _tavily_search(settings.tavily_api_key, _tavily_query)
             if _results:
                 _snippets = "\n\n".join(
                     f"{r['title']}\n{r['url']}\n{r.get('snippet', '')}"
@@ -324,7 +339,7 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                     "The following are live web search results for the user's query. "
                     f"Use them to answer accurately with up-to-date information:\n\n{_snippets}"
                 )
-                logger.info("UI proactive search: {} results for {!r}", len(_results), body.content[:80])
+                logger.info("UI proactive search: {} results query={!r}", len(_results), _tavily_query[:80])
         except Exception as _search_err:
             logger.warning("UI proactive search failed: {}", _search_err)
     # ---------------------------------------------------------------------------
