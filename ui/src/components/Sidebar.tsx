@@ -105,7 +105,7 @@ function SessionRow({
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <p className="truncate text-sm font-medium">{session.title}</p>
+          <p className="truncate text-sm font-medium pr-12">{session.title}</p>
         )}
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-surface-500">
           <span>{relativeTime(session.updated_at)}</span>
@@ -121,8 +121,8 @@ function SessionRow({
         </div>
       </div>
 
-      {/* Action buttons */}
-      {hovering && !editing && (
+      {/* Action buttons – visible on hover (desktop) or when session is active (mobile) */}
+      {(hovering || isActive) && !editing && (
         <div
           className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5"
           onClick={(e) => e.stopPropagation()}
