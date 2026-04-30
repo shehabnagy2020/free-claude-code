@@ -4,7 +4,7 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Header from "./components/Header";
 import * as api from "./lib/api";
-import type { Message, ModelOption, Session } from "./types";
+import type { Message, ModelOption, Session, ImageAttachment } from "./types";
 
 export default function App() {
   // ── Auth ─────────────────────────────────────────────────────────────────
@@ -151,17 +151,40 @@ export default function App() {
   );
 
   const handleSendMessage = useCallback(
-    async (content: string) => {
-      if (!token || !activeSessionId || isStreaming || !content.trim()) return;
+    async (content: string, images: ImageAttachment[] = []) => {
+      if (
+        !token ||
+        !activeSessionId ||
+        isStreaming ||
+        (!content.trim() && images.length === 0)
+      )
+        return;
       setError(null);
 
       // Optimistic: add user message immediately
       const tempId = `temp-${Date.now()}`;
+      // Build a preview-friendly content string
+      const tempContent =
+        images.length > 0
+          ? JSON.stringify([
+              ...images.map((img) => ({
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: img.media_type,
+                  data: img.data,
+                },
+              })),
+              ...(content.trim()
+                ? [{ type: "text", text: content.trim() }]
+                : []),
+            ])
+          : content.trim();
       const tempMsg: Message = {
         id: tempId,
         session_id: activeSessionId,
         role: "user",
-        content: content.trim(),
+        content: tempContent,
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, tempMsg]);
@@ -174,6 +197,10 @@ export default function App() {
         {
           session_id: activeSessionId,
           content: content.trim(),
+          images: images.map((img) => ({
+            media_type: img.media_type,
+            data: img.data,
+          })),
           model: selectedModel?.claude_model ?? "claude-opus-4-20250514",
           max_tokens: 8192,
         },

@@ -5,9 +5,17 @@ import {
   useState,
   useCallback,
 } from "react";
-import { ArrowUp, MessageSquarePlus, Square } from "lucide-react";
+import { ArrowUp, ImagePlus, MessageSquarePlus, Square, X } from "lucide-react";
 import MessageBubble from "./MessageBubble";
-import type { Message } from "../types";
+import type { ImageAttachment, Message } from "../types";
+
+const ACCEPTED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
+const MAX_IMAGES = 10;
 
 interface Props {
   messages: Message[];
@@ -16,7 +24,7 @@ interface Props {
   isStreaming: boolean;
   error: string | null;
   hasSession: boolean;
-  onSend: (content: string) => void;
+  onSend: (content: string, images: ImageAttachment[]) => void;
   onStop: () => void;
   onNewChat: () => void;
 }
@@ -124,8 +132,10 @@ export default function ChatView({
   onNewChat,
 }: Props) {
   const [input, setInput] = useState("");
+  const [images, setImages] = useState<ImageAttachment[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-scroll on new content
   useEffect(() => {
@@ -140,15 +150,44 @@ export default function ChatView({
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
   }, [input]);
 
+  const addFiles = useCallback(
+    (files: FileList | File[]) => {
+      const toAdd = Array.from(files).filter((f) =>
+        ACCEPTED_IMAGE_TYPES.includes(f.type)
+      );
+      toAdd.forEach((file) => {
+        if (images.length >= MAX_IMAGES) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const dataUrl = e.target?.result as string;
+          const [header, data] = dataUrl.split(",");
+          const media_type = header.match(/:(.*?);/)?.[1] ?? "image/jpeg";
+          setImages((prev) =>
+            prev.length >= MAX_IMAGES
+              ? prev
+              : [...prev, { media_type, data, preview_url: dataUrl }]
+          );
+        };
+        reader.readAsDataURL(file);
+      });
+    },
+    [images.length]
+  );
+
+  const removeImage = useCallback((idx: number) => {
+    setImages((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
   const handleSubmit = useCallback(
     (e?: FormEvent) => {
       e?.preventDefault();
       const txt = input.trim();
-      if (!txt || isStreaming) return;
+      if ((!txt && images.length === 0) || isStreaming) return;
       setInput("");
-      onSend(txt);
+      setImages([]);
+      onSend(txt, images);
     },
-    [input, isStreaming, onSend]
+    [input, images, isStreaming, onSend]
   );
 
   const handleKeyDown = useCallback(
@@ -161,12 +200,37 @@ export default function ChatView({
     [handleSubmit]
   );
 
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        addFiles(files);
+      }
+    },
+    [addFiles]
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      addFiles(e.dataTransfer.files);
+    },
+    [addFiles]
+  );
+
   if (!hasSession) {
     return <EmptyState onNewChat={onNewChat} />;
   }
 
+  const canSend =
+    (input.trim().length > 0 || images.length > 0) && !isStreaming;
+
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div
+      className="flex flex-col h-full overflow-hidden"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleDrop}
+    >
       {/* Message list */}
       <div className="custom-scrollbar flex-1 overflow-y-auto py-2">
         {isLoading ? (
@@ -201,16 +265,58 @@ export default function ChatView({
 
       {/* Input area */}
       <div className="px-4 pb-4 pt-2">
+        {/* Image previews */}
+        {images.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {images.map((img, i) => (
+              <div key={i} className="relative group">
+                <img
+                  src={img.preview_url}
+                  alt={`attachment ${i + 1}`}
+                  className="h-16 w-16 rounded-xl object-cover border border-white/10"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(i)}
+                  className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-5 w-5 items-center justify-center rounded-full bg-[#0d0f14] border border-white/20 text-surface-300 hover:text-white"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <form
           onSubmit={handleSubmit}
           className="flex items-end gap-2 rounded-2xl border border-white/10 bg-[#1a1d25] p-2 focus-within:border-blue-500/30 transition-colors"
         >
+          {/* Image attach button */}
+          <button
+            type="button"
+            disabled={isStreaming || images.length >= MAX_IMAGES}
+            onClick={() => fileInputRef.current?.click()}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-surface-400 hover:text-white hover:bg-white/8 transition disabled:opacity-30"
+            title="Attach images"
+          >
+            <ImagePlus className="h-4 w-4" />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_IMAGE_TYPES.join(",")}
+            multiple
+            className="hidden"
+            onChange={(e) => e.target.files && addFiles(e.target.files)}
+          />
+
           <textarea
             ref={textareaRef}
             rows={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={isStreaming ? "Generating…" : "Message Claude…"}
             disabled={isStreaming}
             className="flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-white placeholder-surface-500 outline-none disabled:opacity-50"
@@ -228,7 +334,7 @@ export default function ChatView({
           ) : (
             <button
               type="submit"
-              disabled={!input.trim()}
+              disabled={!canSend}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white hover:bg-blue-500 transition disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
               title="Send"
             >
@@ -237,7 +343,7 @@ export default function ChatView({
           )}
         </form>
         <p className="mt-1.5 text-center text-xs text-surface-600">
-          Shift+Enter for newline · Enter to send
+          Shift+Enter for newline · Enter to send · Paste or drag images
         </p>
       </div>
     </div>

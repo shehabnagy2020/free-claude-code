@@ -3,7 +3,7 @@ import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Check, Copy, User } from "lucide-react";
+import { Check, Copy, User, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import type { Message } from "../types";
 
@@ -37,15 +37,83 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** Parse message content – may be plain text or a JSON array of Anthropic content blocks. */
+function parseContent(raw: string): { text: string; images: string[] } {
+  if (raw.startsWith("[")) {
+    try {
+      const blocks = JSON.parse(raw) as Array<{
+        type: string;
+        text?: string;
+        source?: { type: string; media_type: string; data: string };
+      }>;
+      const text = blocks
+        .filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join("\n");
+      const images = blocks
+        .filter((b) => b.type === "image" && b.source?.type === "base64")
+        .map((b) => `data:${b.source!.media_type};base64,${b.source!.data}`);
+      return { text, images };
+    } catch {
+      // fall through to plain text
+    }
+  }
+  return { text: raw, images: [] };
+}
+
+function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <button
+        className="absolute top-4 right-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 transition"
+        onClick={onClose}
+        aria-label="Close"
+      >
+        <X className="h-5 w-5" />
+      </button>
+      <img
+        src={src}
+        alt="Full size"
+        className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
+
 export default function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
+  const { text, images } = parseContent(message.content);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   if (isUser) {
     return (
       <div className="flex justify-end px-4 py-2 animate-fade-in">
+        {lightboxSrc && (
+          <ImageLightbox
+            src={lightboxSrc}
+            onClose={() => setLightboxSrc(null)}
+          />
+        )}
         <div className="flex items-end gap-2 max-w-[80%]">
           <div className="rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white shadow-md shadow-blue-900/20">
-            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+            {images.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {images.map((src, i) => (
+                  <img
+                    key={i}
+                    src={src}
+                    alt={`image ${i + 1}`}
+                    className="max-h-48 max-w-[240px] rounded-lg object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => setLightboxSrc(src)}
+                  />
+                ))}
+              </div>
+            )}
+            {text && <p className="whitespace-pre-wrap break-words">{text}</p>}
           </div>
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600/20 border border-blue-500/20">
             <User className="h-3.5 w-3.5 text-blue-400" />
@@ -130,7 +198,7 @@ export default function MessageBubble({ message }: Props) {
               },
             }}
           >
-            {message.content}
+            {text}
           </ReactMarkdown>
         </div>
       </div>

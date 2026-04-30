@@ -190,6 +190,7 @@ export function streamChat(
   payload: {
     session_id: string;
     content: string;
+    images?: Array<{ media_type: string; data: string }>;
     model: string;
     max_tokens?: number;
   },

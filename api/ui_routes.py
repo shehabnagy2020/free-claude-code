@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
-import secrets
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
@@ -19,8 +20,25 @@ from .ui_db import UIChatDB
 
 ui_router = APIRouter(prefix="/ui/api")
 
-# In-memory set of valid session tokens (cleared on server restart → re-login).
-_active_tokens: set[str] = set()
+
+# ── Stateless HMAC token ──────────────────────────────────────────────────────────
+#
+# A token is HMAC-SHA256(password, key=password + ":fcc-ui").
+# This is deterministic and survives server restarts without any stored state.
+
+_TOKEN_SUFFIX = b":fcc-ui"
+
+
+def _make_token(password: str) -> str:
+    key = password.encode() + _TOKEN_SUFFIX
+    return hmac.new(key, password.encode(), hashlib.sha256).hexdigest()
+
+
+def _verify_token_value(token: str) -> bool:
+    """Re-derive expected token from current password and compare in constant time."""
+    settings = get_settings()
+    expected = _make_token(settings.ui_password)
+    return hmac.compare_digest(expected, token)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -33,7 +51,7 @@ def _get_db(request: Request) -> UIChatDB:
 def _verify_token(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     token = auth.removeprefix("Bearer ").strip()
-    if not token or token not in _active_tokens:
+    if not token or not _verify_token_value(token):
         raise HTTPException(status_code=401, detail="Unauthorized – please log in")
     return token
 
@@ -61,6 +79,7 @@ class UpdateSessionRequest(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     content: str
+    images: list[dict[str, str]] = []  # [{media_type, data}, ...] base64 image blocks
     model: str = "claude-opus-4-20250514"
     max_tokens: int = 8192
 
@@ -78,48 +97,32 @@ async def login(body: LoginRequest) -> dict[str, Any]:
     settings = get_settings()
     if body.password != settings.ui_password:
         raise HTTPException(status_code=401, detail="Invalid password")
-    token = secrets.token_hex(32)
-    _active_tokens.add(token)
-    return {"token": token, "ok": True}
+    return {"token": _make_token(body.password)}
 
 
 @ui_router.post("/auth/logout")
 async def logout(request: Request) -> dict[str, bool]:
-    auth = request.headers.get("authorization", "")
-    token = auth.removeprefix("Bearer ").strip()
-    _active_tokens.discard(token)
+    # Stateless tokens – nothing to invalidate server-side.
+    # Client is responsible for discarding the token.
     return {"ok": True}
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 
-# Claude model id → friendly display name shown in the UI
-_CLAUDE_DISPLAY_NAMES: dict[str, str] = {
-    "claude-opus-4": "Claude Opus 4",
-    "claude-3-7-sonnet": "Claude 3.7 Sonnet",
-    "claude-3-5-sonnet": "Claude 3.5 Sonnet",
-    "claude-3-5-haiku": "Claude 3.5 Haiku",
-    "claude-3-opus": "Claude 3 Opus",
-    "claude-3-sonnet": "Claude 3 Sonnet",
-    "claude-3-haiku": "Claude 3 Haiku",
-}
-
-
-def _claude_display_name(claude_model_id: str) -> str:
-    """Return a human-readable Claude model name for the given model ID."""
-    lower = claude_model_id.lower()
-    # Match longest prefix first so 'claude-3-5-sonnet' beats 'claude-3-sonnet'
-    for key in sorted(_CLAUDE_DISPLAY_NAMES, key=len, reverse=True):
-        if key in lower:
-            return _CLAUDE_DISPLAY_NAMES[key]
-    # Fallback: strip date suffix and title-case
-    base = lower.rsplit("-", 1)[0] if lower[-8:].isdigit() else lower
-    return base.replace("-", " ").title()
+# The three tiers always shown in the model selector, regardless of .env.
+# The proxy's own resolve_model() maps each Claude ID to the right provider.
+_MODEL_TIERS: list[dict[str, str]] = [
+    {"label": "Claude Opus",   "claude_id": "claude-opus-4-20250514",     "tier": "opus"},
+    {"label": "Claude Sonnet", "claude_id": "claude-3-5-sonnet-20241022", "tier": "sonnet"},
+    {"label": "Claude Haiku",  "claude_id": "claude-3-haiku-20240307",    "tier": "haiku"},
+]
 
 
 def _provider_display(model_str: str) -> str:
     """Convert 'provider_type/model/name' → human-readable provider label."""
+    if not model_str:
+        return ""
     parts = model_str.split("/", 1)
     provider_id = parts[0]
     model_name = parts[1] if len(parts) > 1 else ""
@@ -129,50 +132,27 @@ def _provider_display(model_str: str) -> str:
 
 @ui_router.get("/config")
 async def get_config(_: Token) -> dict[str, Any]:
-    """Return available model routes derived from current settings."""
+    """Return the fixed three-tier model selector with resolved provider labels."""
     settings = get_settings()
-    models: list[dict[str, Any]] = []
 
-    # Default model (settings.model) maps to Opus 4 by convention
+    # Mark the tier that matches settings.model as default.
+    default_tier = "opus"
     if settings.model:
-        default_claude_id = "claude-opus-4-20250514"
+        m = settings.model.lower()
+        if "haiku" in m:
+            default_tier = "haiku"
+        elif "sonnet" in m:
+            default_tier = "sonnet"
+
+    models: list[dict[str, Any]] = []
+    for tier in _MODEL_TIERS:
+        resolved = settings.resolve_model(tier["claude_id"])
         models.append(
             {
-                "label": _claude_display_name(default_claude_id),
-                "target": settings.model,
-                "claude_model": default_claude_id,
-                "provider_display": _provider_display(settings.model),
-                "is_default": True,
-            }
-        )
-
-    # Per-tier overrides (MODEL_OPUS / MODEL_SONNET / MODEL_HAIKU)
-    named: list[tuple[str | None, str]] = [
-        (settings.model_opus, "claude-3-opus-20240229"),
-        (settings.model_sonnet, "claude-3-5-sonnet-20241022"),
-        (settings.model_haiku, "claude-3-haiku-20240307"),
-    ]
-    for override, claude_id in named:
-        if override:
-            models.append(
-                {
-                    "label": _claude_display_name(claude_id),
-                    "target": override,
-                    "claude_model": claude_id,
-                    "provider_display": _provider_display(override),
-                    "is_default": False,
-                }
-            )
-
-    if not models:
-        fallback_id = "claude-opus-4-20250514"
-        models.append(
-            {
-                "label": _claude_display_name(fallback_id),
-                "target": "",
-                "claude_model": fallback_id,
-                "provider_display": "",
-                "is_default": True,
+                "label": tier["label"],
+                "claude_model": tier["claude_id"],
+                "provider_display": _provider_display(resolved),
+                "is_default": tier["tier"] == default_tier,
             }
         )
 
@@ -229,12 +209,44 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     if not await db.session_exists(body.session_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Save user message first
-    await db.add_message(body.session_id, "user", body.content)
+    # Build Anthropic content blocks for this user turn.
+    # If images are attached, content is a list of blocks; otherwise plain text.
+    if body.images:
+        user_blocks: list[dict[str, Any]] = []
+        for img in body.images:
+            user_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.get("media_type", "image/jpeg"),
+                    "data": img["data"],
+                },
+            })
+        if body.content.strip():
+            user_blocks.append({"type": "text", "text": body.content})
+        user_content_for_api: list[dict[str, Any]] | str = user_blocks
+        # Persist as JSON so the frontend can render image thumbnails from history
+        user_content_for_db = json.dumps(user_blocks)
+    else:
+        user_content_for_api = body.content
+        user_content_for_db = body.content
 
-    # Build full history for context
+    # Save user message to DB
+    await db.add_message(body.session_id, "user", user_content_for_db)
+
+    # Build full history for the API request.
+    # Messages stored as JSON arrays are passed as structured content blocks;
+    # plain strings are passed as-is.
+    def _parse_content(raw: str) -> list[dict[str, Any]] | str:
+        if raw.startswith("["):
+            try:
+                return json.loads(raw)  # type: ignore[return-value]
+            except json.JSONDecodeError:
+                pass
+        return raw
+
     history = await db.get_messages(body.session_id)
-    messages = [{"role": m["role"], "content": m["content"]} for m in history]
+    messages = [{"role": m["role"], "content": _parse_content(m["content"])} for m in history]
 
     settings = get_settings()
     port = settings.port
@@ -255,7 +267,7 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     }
 
     session_id = body.session_id
-    user_content = body.content
+    user_text_for_title = body.content.strip() or "🖼️ Image"
 
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
@@ -295,8 +307,8 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                     sessions = await db.list_sessions()
                     for s in sessions:
                         if s["id"] == session_id and s["title"] == "New Chat":
-                            new_title = user_content[:60].replace("\n", " ")
-                            if len(user_content) > 60:
+                            new_title = user_text_for_title[:60].replace("\n", " ")
+                            if len(user_text_for_title) > 60:
                                 new_title += "…"
                             await db.update_session(session_id, title=new_title)
                             break
