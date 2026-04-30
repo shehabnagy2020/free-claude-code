@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
@@ -351,16 +352,34 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
             except json.JSONDecodeError:
                 tool_name = None  # malformed tool call — treat as normal response
 
+        # Fallback: model wrote <web_search>query</web_search> as XML in text
+        if not tool_name:
+            full_text = "".join(text_parts)
+            m = re.search(r"<web_search[^>]*>(.*?)</web_search>", full_text, re.DOTALL)
+            if m:
+                tool_name = "web_search"
+                tool_input = {"query": m.group(1).strip()}
+                logger.info("UI: detected XML-style web_search tag, query={!r}", tool_input["query"])
+
         return chunks, text_parts, tool_name, tool_input
 
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
         try:
+            _system: str | None = (
+                "You have access to web_search and web_fetch tools. "
+                "Whenever the user asks about current events, weather, news, prices, scores, "
+                "or anything that may have changed recently, you MUST call the web_search tool "
+                "with a relevant query. Do NOT output XML tags like <web_search> — use the tool_use "
+                "mechanism directly. Do NOT answer from training data alone for time-sensitive queries."
+                if injected_tools else None
+            )
             cur_request = MessagesRequest(
                 model=body.model,
                 messages=loop_messages,  # type: ignore[arg-type]
                 max_tokens=body.max_tokens,
                 stream=True,
+                system=_system,
                 tools=injected_tools,  # type: ignore[arg-type]
             )
             resp = service.create_message(cur_request)
@@ -422,6 +441,7 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                         messages=loop_messages,  # type: ignore[arg-type]
                         max_tokens=body.max_tokens,
                         stream=True,
+                        system=_system,
                         tools=injected_tools,  # type: ignore[arg-type]
                     )
                     follow_resp = service.create_message(follow_req)

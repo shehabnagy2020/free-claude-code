@@ -82,22 +82,17 @@ async def enrich_empty_tool_results(
     This is a no-op if no empty results are found or if tavily_api_key is unset.
     """
     if not tavily_api_key or not request.messages:
-        logger.info("enrichment: skipped — no api_key={} msgs={}", bool(tavily_api_key), len(request.messages))
         return request
 
     tool_use_index = _build_tool_use_index(request.messages)
-    logger.info("enrichment: tool_use_index keys={}", list(tool_use_index.keys()))
     if not tool_use_index:
-        logger.info("enrichment: skipped — no tool_use found in history")
         return request
 
     # Check last user message for tool_result blocks with empty content.
     last_msg = request.messages[-1]
     if last_msg.role != "user":
-        logger.info("enrichment: skipped — last msg role={}", last_msg.role)
         return request
     if not isinstance(last_msg.content, list):
-        logger.info("enrichment: skipped — last msg content is str not list")
         return request
 
     enrichments: dict[int, str] = {}  # block index → new text content
@@ -110,18 +105,10 @@ async def enrich_empty_tool_results(
         content = getattr(block, "content", None) if not isinstance(block, dict) else block.get("content")
 
         is_empty = _is_empty_result(content)
-        # For agent web tools we always replace with Tavily regardless of content,
-        # because Claude Code's own DuckDuckGo search returns unreliable results.
         tool_info = tool_use_index.get(tool_use_id) if tool_use_id else None
         tool_name_for_block = tool_info["name"] if tool_info else ""
         always_replace = tool_name_for_block in (_AGENT_WEB_SEARCH_NAMES | _AGENT_WEB_FETCH_NAMES)
-        logger.info(
-            "enrichment: block[{}] type=tool_result id={} is_empty={} always_replace={} content_preview={!r}",
-            i, tool_use_id, is_empty, always_replace,
-            (str(content)[:120] if content is not None else None),
-        )
         if not tool_use_id or not tool_info:
-            logger.info("enrichment: tool_use_id={} not found in index", tool_use_id)
             continue
         if not is_empty and not always_replace:
             continue
