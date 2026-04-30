@@ -1,6 +1,6 @@
 # AGENTIC DIRECTIVE
 
-> This file is identical to CLAUDE.md. Keep them in sync.
+> This is the primary agent directive file. CLAUDE.md references this file.
 
 ## CODING ENVIRONMENT
 
@@ -71,6 +71,9 @@
 
 - Built with React + Vite + Tailwind. Source in `ui/src/`, built output in `ui/dist/` (served statically by FastAPI).
 - **Always rebuild after editing UI source**: run `cd ui && npx vite build` on the deployment machine (Pi). PM2's `fcc-ui` process runs `vite build --watch` for auto-rebuild on that machine.
+- **Auth**: Stateless HMAC-SHA256 tokens (`_TOKEN_SUFFIX = ":fcc-ui"`), no server-side session storage.
+- **Database**: SQLite via `api/ui_db.py` — sessions, messages, history.
+- **Model selector**: Fixed 3-tier (Opus/Sonnet/Haiku) with resolved provider display labels.
 - **Streaming chat flow** (`api/ui_routes.py` → `ui/src/App.tsx`):
   1. Backend saves user message and **sets session title** (first turn only, `if not history`) _before_ the stream starts — no race.
   2. Frontend updates session title **optimistically in local state** the moment the user sends (no waiting for network).
@@ -79,6 +82,15 @@
 - **No fixed-delay polling for titles**: title is set server-side before the HTTP response body starts, and mirrored client-side optimistically — never poll for it.
 - **Race-free DB sync**: `onDone` never clears streaming state before the canonical messages are fetched; optimistic message prevents blank-screen flash.
 - **`ui/src/lib/api.ts`**: all HTTP calls. `streamChat` returns an `AbortController`; retries connection errors up to 2× with exponential backoff.
+
+### Tavily Web Search Integration (UI)
+
+- **Proactive search**: Detects real-time queries via `_REALTIME_KEYWORDS` (time refs, weather, news, finance, sports, tech, search intent).
+- **Context-aware queries**: For follow-ups like "and this week?", prepends last user turn from history for topic/location context.
+- **System prompt injection**: Tavily results injected as `_tavily_system` before LLM call — no tool round-trip, works with any model.
+- **Enrichment** (`api/web_tools/enrichment.py`): Auto-fills empty `WebSearch`/`WebFetch` tool_result blocks from Claude Code with Tavily data.
+- **Module-level caches**: `_REALTIME_KEYWORDS` frozenset built once at import; Tavily client reuses httpx connections.
+- **Keywords**: `today`, `weather`, `news`, `price`, `score`, `trending`, `search`, `who is`, `what is`, etc. (see `_REALTIME_KEYWORDS` in `api/ui_routes.py`).
 
 ## IMAGE SUPPORT
 

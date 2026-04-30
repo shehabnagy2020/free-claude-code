@@ -300,6 +300,21 @@ alias claude-kimi='ANTHROPIC_BASE_URL="http://localhost:8082" ANTHROPIC_AUTH_TOK
 
 ## Optional Integrations
 
+### Web UI Chat
+
+Access Claude through a modern web interface at `http://localhost:8082/ui/`.
+
+```dotenv
+UI_PASSWORD="your-secure-password"
+```
+
+Features:
+- **Three-tier model selector**: Opus, Sonnet, Haiku with provider labels
+- **Session history**: SQLite-backed chat history with searchable sidebar
+- **Image support**: Attach PNG, JPEG, GIF, WebP images to messages
+- **Proactive web search**: Auto-detects real-time queries (weather, news, prices, scores) and fetches Tavily results
+- **Streaming responses**: Real-time SSE streaming with optimistic UI updates
+
 ### Discord And Telegram Bots
 
 The bot wrapper runs Claude Code sessions remotely, streams progress, supports reply-based conversation branches, and can stop or clear tasks.
@@ -425,9 +440,12 @@ Raw logging flags can expose prompts, tool arguments, paths, and model output. K
 ENABLE_WEB_SERVER_TOOLS=true
 WEB_FETCH_ALLOWED_SCHEMES=http,https
 WEB_FETCH_ALLOW_PRIVATE_NETWORKS=false
+TAVILY_API_KEY=tvly-...
 ```
 
 These tools perform outbound HTTP from the proxy. Keep private-network access disabled unless you are in a controlled lab environment.
+
+**Tavily Search**: When `TAVILY_API_KEY` is set, the proxy automatically enriches empty `WebSearch`/`WebFetch` tool results and proactively searches for real-time queries (weather, news, prices, scores, etc.). Get a key at [tavily.com](https://tavily.com).
 
 ## Troubleshooting
 
