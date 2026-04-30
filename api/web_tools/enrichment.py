@@ -26,15 +26,30 @@ def _is_empty_result(content: Any) -> bool:
     if content is None:
         return True
     if isinstance(content, str):
-        return len(content.strip()) < _EMPTY_THRESHOLD
+        stripped = content.strip()
+        # Treat as empty if blank, or only contains "no results" type messages
+        if not stripped or len(stripped) < _EMPTY_THRESHOLD:
+            return True
+        low = stripped.lower()
+        return (
+            "0 searches" in low
+            or "no results" in low
+            or "no web results" in low
+            or "did 0" in low
+        )
     if isinstance(content, list):
         if not content:
             return True
         # Flatten text out of content blocks
         text = " ".join(
-            b.get("text", "") if isinstance(b, dict) else str(b) for b in content
+            b.get("text", "") if isinstance(b, dict) else (b.text if hasattr(b, "text") else str(b))
+            for b in content
         )
-        return len(text.strip()) < _EMPTY_THRESHOLD
+        stripped = text.strip()
+        if len(stripped) < _EMPTY_THRESHOLD:
+            return True
+        low = stripped.lower()
+        return "0 searches" in low or "no results" in low or "did 0" in low
     return False
 
 
@@ -67,17 +82,22 @@ async def enrich_empty_tool_results(
     This is a no-op if no empty results are found or if tavily_api_key is unset.
     """
     if not tavily_api_key or not request.messages:
+        logger.info("enrichment: skipped — no api_key={} msgs={}", bool(tavily_api_key), len(request.messages))
         return request
 
     tool_use_index = _build_tool_use_index(request.messages)
+    logger.info("enrichment: tool_use_index keys={}", list(tool_use_index.keys()))
     if not tool_use_index:
+        logger.info("enrichment: skipped — no tool_use found in history")
         return request
 
     # Check last user message for tool_result blocks with empty content.
     last_msg = request.messages[-1]
     if last_msg.role != "user":
+        logger.info("enrichment: skipped — last msg role={}", last_msg.role)
         return request
     if not isinstance(last_msg.content, list):
+        logger.info("enrichment: skipped — last msg content is str not list")
         return request
 
     enrichments: dict[int, str] = {}  # block index → new text content
@@ -89,11 +109,18 @@ async def enrich_empty_tool_results(
         tool_use_id = getattr(block, "tool_use_id", None) if not isinstance(block, dict) else block.get("tool_use_id")
         content = getattr(block, "content", None) if not isinstance(block, dict) else block.get("content")
 
-        if not tool_use_id or not _is_empty_result(content):
+        is_empty = _is_empty_result(content)
+        logger.info(
+            "enrichment: block[{}] type=tool_result id={} is_empty={} content_preview={!r}",
+            i, tool_use_id, is_empty,
+            (str(content)[:120] if content is not None else None),
+        )
+        if not tool_use_id or not is_empty:
             continue
 
         tool_info = tool_use_index.get(tool_use_id)
         if not tool_info:
+            logger.info("enrichment: tool_use_id={} not found in index", tool_use_id)
             continue
 
         name: str = tool_info["name"]

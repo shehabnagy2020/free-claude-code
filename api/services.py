@@ -57,7 +57,9 @@ async def _enriched_stream(
     tavily_api_key: str,
 ) -> AsyncGenerator[str, None]:
     """Enrich empty WebSearch/WebFetch tool_results via Tavily then stream from provider."""
+    logger.info("_enriched_stream: starting enrichment msgs={}", len(request.messages))
     enriched = await enrich_empty_tool_results(request, tavily_api_key=tavily_api_key)
+    logger.info("_enriched_stream: enrichment done, streaming")
     async for chunk in provider.stream_response(
         enriched,
         input_tokens=input_tokens,
