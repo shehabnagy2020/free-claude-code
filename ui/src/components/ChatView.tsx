@@ -146,6 +146,7 @@ export default function ChatView({
 }: Props) {
   const [input, setInput] = useState("");
   const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [pendingCount, setPendingCount] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -168,8 +169,14 @@ export default function ChatView({
       const toAdd = Array.from(files).filter((f) =>
         ACCEPTED_IMAGE_TYPES.includes(f.type)
       );
+      if (toAdd.length === 0) return;
+      // Show spinner slots immediately
+      setPendingCount((n) => n + toAdd.length);
       toAdd.forEach((file) => {
-        if (images.length >= MAX_IMAGES) return;
+        if (images.length >= MAX_IMAGES) {
+          setPendingCount((n) => Math.max(0, n - 1));
+          return;
+        }
         const reader = new FileReader();
         reader.onload = (e) => {
           const dataUrl = e.target?.result as string;
@@ -180,7 +187,9 @@ export default function ChatView({
               ? prev
               : [...prev, { media_type, data, preview_url: dataUrl }]
           );
+          setPendingCount((n) => Math.max(0, n - 1));
         };
+        reader.onerror = () => setPendingCount((n) => Math.max(0, n - 1));
         reader.readAsDataURL(file);
       });
     },
@@ -198,6 +207,7 @@ export default function ChatView({
       if ((!txt && images.length === 0) || isStreaming) return;
       setInput("");
       setImages([]);
+      setPendingCount(0);
       onSend(txt, images);
     },
     [input, images, isStreaming, onSend]
@@ -236,7 +246,9 @@ export default function ChatView({
   }
 
   const canSend =
-    (input.trim().length > 0 || images.length > 0) && !isStreaming;
+    (input.trim().length > 0 || images.length > 0) &&
+    !isStreaming &&
+    pendingCount === 0;
 
   return (
     <div
@@ -284,7 +296,7 @@ export default function ChatView({
       {/* Input area */}
       <div className="px-4 pb-4 pt-2">
         {/* Image previews */}
-        {images.length > 0 && (
+        {(images.length > 0 || pendingCount > 0) && (
           <div className="mb-2 flex flex-wrap gap-2">
             {images.map((img, i) => (
               <div key={i} className="relative group">
@@ -300,6 +312,14 @@ export default function ChatView({
                 >
                   <X className="h-3 w-3" />
                 </button>
+              </div>
+            ))}
+            {Array.from({ length: pendingCount }).map((_, i) => (
+              <div
+                key={`pending-${i}`}
+                className="h-16 w-16 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center shrink-0"
+              >
+                <div className="w-5 h-5 rounded-full border-2 border-blue-400/60 border-t-transparent animate-spin" />
               </div>
             ))}
           </div>

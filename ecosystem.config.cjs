@@ -12,9 +12,17 @@ module.exports = {
         persistent: true,
         ignoreInitial: true,
       },
+      ignore_watch: [
+        "**/__pycache__",
+        "**/*.pyc",
+        "**/*.pyo",
+        "**/.pytest_cache",
+        "**/node_modules",
+      ],
       autorestart: true,
       max_restarts: 10,
       restart_delay: 5000,
+      kill_timeout: 10000,
       max_memory_restart: "500M",
       node_args: undefined,
       env: {
