@@ -135,7 +135,7 @@ class ClaudeProxyService:
                         input_tokens=input_tokens,
                         web_fetch_egress=egress,
                         verbose_client_errors=self._settings.log_api_error_tracebacks,
-                        tavily_mcp_url=self._settings.tavily_mcp_url,
+                        tavily_api_key=self._settings.tavily_api_key,
                     ),
                 )
 

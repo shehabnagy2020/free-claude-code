@@ -269,16 +269,33 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     _WEB_TOOLS: list[dict[str, Any]] = [
         {
             "name": "web_search",
-            "type": "web_search_20250305",
-            "description": "Search the web for current information.",
+            "type": "custom",
+            "description": (
+                "Search the web for current information such as news, weather, prices, "
+                "events, or anything that may have changed after your knowledge cutoff."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query."},
+                },
+                "required": ["query"],
+            },
         },
         {
             "name": "web_fetch",
-            "type": "web_fetch_20250305",
-            "description": "Fetch and read the content of a URL.",
+            "type": "custom",
+            "description": "Fetch and read the full content of a URL.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch."},
+                },
+                "required": ["url"],
+            },
         },
     ]
-    injected_tools = _WEB_TOOLS if settings.tavily_mcp_url else None
+    injected_tools = _WEB_TOOLS if settings.tavily_api_key else None
 
     service = ClaudeProxyService(
         settings,
@@ -367,13 +384,13 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
             else:
                 chunks, first_text, tool_name, tool_input = await _collect_response(first_iter)
 
-                if tool_name and tool_input and settings.tavily_mcp_url:
+                if tool_name and tool_input and settings.tavily_api_key:
                     # Model wants to use a web tool — execute via Tavily silently.
                     logger.info("UI agentic tool: {}", tool_name)
                     try:
                         if tool_name == "web_search":
                             query = str(tool_input.get("query", ""))
-                            results = await _tavily_search(settings.tavily_mcp_url, query)
+                            results = await _tavily_search(settings.tavily_api_key, query)
                             tool_result_content = (
                                 "\n\n".join(
                                     f"{r['title']}\n{r['url']}\n{r.get('snippet', '')}"
@@ -383,7 +400,7 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                             )
                         else:
                             url = str(tool_input.get("url", ""))
-                            fetched = await _tavily_fetch(settings.tavily_mcp_url, url)
+                            fetched = await _tavily_fetch(settings.tavily_api_key, url)
                             tool_result_content = fetched["data"]
                     except Exception as tool_err:
                         logger.warning("UI agentic tool error: {}", tool_err)

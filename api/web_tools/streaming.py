@@ -48,7 +48,7 @@ async def stream_web_server_tool_response(
     *,
     web_fetch_egress: WebFetchEgressPolicy,
     verbose_client_errors: bool = False,
-    tavily_mcp_url: str = "",
+    tavily_api_key: str = "",
 ) -> AsyncIterator[str]:
     """Stream a minimal Anthropic-shaped turn for forced `web_search` / `web_fetch` (local fallback).
 
@@ -115,11 +115,11 @@ async def stream_web_server_tool_response(
     try:
         if tool_name == "web_search":
             query = str(tool_input["query"])
-            if not tavily_mcp_url:
+            if not tavily_api_key:
                 raise RuntimeError(
-                    "TAVILY_MCP_URL is not configured. Set it in your .env to enable web search."
+                    "TAVILY_API_KEY is not configured. Set it in your .env to enable web search."
                 )
-            results = await _tavily.tavily_search(tavily_mcp_url, query)
+            results = await _tavily.tavily_search(tavily_api_key, query)
             result_content: Any = [
                 {
                     "type": "web_search_result",
@@ -131,12 +131,12 @@ async def stream_web_server_tool_response(
             summary = _search_summary(query, results)
             result_block_type = WEB_SEARCH_TOOL_RESULT
         else:
-            if not tavily_mcp_url:
+            if not tavily_api_key:
                 raise RuntimeError(
-                    "TAVILY_MCP_URL is not configured. Set it in your .env to enable web fetch."
+                    "TAVILY_API_KEY is not configured. Set it in your .env to enable web fetch."
                 )
             fetched = await _tavily.tavily_fetch(
-                tavily_mcp_url, str(tool_input["url"])
+                tavily_api_key, str(tool_input["url"])
             )
             result_content = {
                 "type": "web_fetch_result",
