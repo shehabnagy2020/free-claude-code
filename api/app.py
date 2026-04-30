@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -74,20 +74,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Register API routes first – these take priority over the static-file mount
+    # Register API routes – these take priority over the static-file mount
     # because Starlette checks Route objects before Mount objects in insertion order.
     #
     # Route namespace summary (no overlaps):
-    #   /v1/*        – Claude proxy API  (router)
-    #   /ui/api/*    – Web UI REST API   (ui_router, prefix="/ui/api")
-    #   /ui/*        – React SPA         (_SPAStaticFiles mount below)
+    #   /          – Claude proxy status JSON  (router GET /)
+    #   /v1/*      – Claude proxy API          (router)
+    #   /ui/api/*  – Web UI REST API           (ui_router, prefix="/ui/api")
+    #   /ui/*      – React SPA                 (_SPAStaticFiles mount below)
     app.include_router(router)
     app.include_router(ui_router)
-
-    # Convenience redirect: visiting the server root goes straight to the UI.
-    @app.get("/", include_in_schema=False)
-    async def _root_redirect() -> RedirectResponse:
-        return RedirectResponse(url="/ui/", status_code=302)
 
     # Serve the built React SPA at /ui.
     # The _SPAStaticFiles subclass falls back to index.html for any 404 so that
