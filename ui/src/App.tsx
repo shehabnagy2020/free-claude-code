@@ -217,11 +217,13 @@ export default function App() {
             setStreamingText(accText);
           },
           onDone: async () => {
-            setIsStreaming(false);
-            setStreamingText("");
-            // Reload canonical messages from DB
+            // Fetch canonical messages first, then clear streaming state.
+            // React 18 batches all three setters into one render so there's
+            // no flash where the streaming bubble disappears before the real message appears.
             const msgs = await api.fetchMessages(token, activeSessionId);
             setMessages(msgs);
+            setIsStreaming(false);
+            setStreamingText("");
             // Refresh session list (title + updated_at may have changed)
             void loadSessions();
           },

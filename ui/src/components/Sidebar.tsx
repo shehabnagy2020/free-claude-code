@@ -42,7 +42,7 @@ function SessionRow({
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(session.title);
   const [hovering, setHovering] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   const startEdit = useCallback(
@@ -72,14 +72,9 @@ function SessionRow({
   const handleDelete = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (!deleteConfirm) {
-        setDeleteConfirm(true);
-        setTimeout(() => setDeleteConfirm(false), 2500);
-        return;
-      }
       onDelete();
     },
-    [deleteConfirm, onDelete]
+    [onDelete]
   );
 
   return (
@@ -94,7 +89,6 @@ function SessionRow({
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => {
         setHovering(false);
-        setDeleteConfirm(false);
       }}
     >
       <MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-surface-500" />
@@ -141,14 +135,9 @@ function SessionRow({
             <PencilLine className="h-3.5 w-3.5" />
           </button>
           <button
-            className={[
-              "rounded p-1 transition",
-              deleteConfirm
-                ? "text-red-400 bg-red-500/15 hover:bg-red-500/25"
-                : "text-surface-400 hover:text-red-400 hover:bg-white/10",
-            ].join(" ")}
+            className="rounded p-1 transition text-surface-400 hover:text-red-400 hover:bg-white/10"
             onClick={handleDelete}
-            title={deleteConfirm ? "Click again to confirm" : "Delete"}
+            title="Delete"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
