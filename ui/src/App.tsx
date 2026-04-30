@@ -229,10 +229,11 @@ export default function App() {
             setMessages((prev) => [...prev, assistantMsg]);
             setIsStreaming(false);
             setStreamingText("");
-            void loadSessions();
             // Background sync: replace optimistic message with canonical DB rows.
             // Retry up to 3 times (300 ms apart) to handle the race between the
             // SSE stream ending and the backend finally-block completing its INSERT.
+            // loadSessions is called after the DB write is confirmed so the
+            // auto-generated title is already set by the time we refresh the list.
             for (let attempt = 0; attempt < 3; attempt++) {
               await new Promise<void>((r) => setTimeout(r, 300));
               try {
@@ -240,6 +241,7 @@ export default function App() {
                 // Only replace once the assistant message has been persisted.
                 if (msgs[msgs.length - 1]?.role === "assistant") {
                   setMessages(msgs);
+                  void loadSessions();
                   break;
                 }
               } catch {
