@@ -25,13 +25,14 @@ from .models.responses import TokenCountResponse
 from .optimization_handlers import try_optimizations
 from .web_tools.egress import WebFetchEgressPolicy
 from .web_tools.request import (
+    has_agent_web_tools,
     has_listed_anthropic_server_tools,
     inject_web_search_system_prompt,
     is_web_server_tool_request,
     openai_chat_upstream_server_tool_error,
     strip_server_tools,
 )
-from .web_tools.streaming import stream_web_server_tool_response
+from .web_tools.streaming import stream_web_server_tool_response, stream_with_web_tool_interception
 
 TokenCounter = Callable[[list[Any], str | list[Any] | None, list[Any] | None], int]
 
@@ -142,9 +143,11 @@ class ClaudeProxyService:
 
             # ----- Web server tool handling (web_search / web_fetch) -----
             web_tools_listed = has_listed_anthropic_server_tools(routed.request)
+            agent_web_tools = has_agent_web_tools(routed.request)
             logger.info(
-                "[3/6] WEB_TOOLS: listed={} enabled={} is_forced={}",
+                "[3/6] WEB_TOOLS: listed={} agent={} enabled={} is_forced={}",
                 web_tools_listed,
+                agent_web_tools,
                 self._settings.enable_web_server_tools,
                 is_web_server_tool_request(routed.request),
             )
@@ -194,7 +197,10 @@ class ClaudeProxyService:
 
             # When web tools were listed, inject a system prompt instruction so the
             # model calls web_search instead of answering from training data.
-            if web_tools_listed and self._settings.enable_web_server_tools:
+            _needs_web_injection = (
+                (web_tools_listed or agent_web_tools) and self._settings.enable_web_server_tools
+            )
+            if _needs_web_injection:
                 forward_request = inject_web_search_system_prompt(forward_request)
                 logger.info("[5b] Injected web_search system prompt instruction")
             stripped_tools = [t.name for t in (forward_request.tools or [])]
@@ -227,14 +233,22 @@ class ClaudeProxyService:
             input_tokens = self._token_counter(
                 forward_request.messages, forward_request.system, forward_request.tools
             )
-            return anthropic_sse_streaming_response(
-                provider.stream_response(
-                    forward_request,
-                    input_tokens=input_tokens,
-                    request_id=request_id,
-                    thinking_enabled=routed.resolved.thinking_enabled,
-                ),
+            provider_stream = provider.stream_response(
+                forward_request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                thinking_enabled=routed.resolved.thinking_enabled,
             )
+            # Intercept tool_use blocks for WebSearch / WebFetch (Claude Code agent tools)
+            # and execute them via Tavily so the model gets real results.
+            if agent_web_tools and self._settings.enable_web_server_tools:
+                logger.info("[6b] Wrapping stream with web_tool_interception (agent tools)")
+                provider_stream = stream_with_web_tool_interception(
+                    provider_stream,
+                    tavily_api_key=self._settings.tavily_api_key,
+                    verbose_client_errors=self._settings.log_api_error_tracebacks,
+                )
+            return anthropic_sse_streaming_response(provider_stream)
 
         except ProviderError:
             raise

@@ -31,7 +31,8 @@ from .request import (
     has_tool_named,
 )
 
-_WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch"})
+# Both Anthropic server tool names (lowercase) and Claude Code agent tool names (CamelCase)
+_WEB_TOOL_NAMES = frozenset({"web_search", "web_fetch", "WebSearch", "WebFetch"})
 
 
 def _search_summary(query: str, results: list[dict[str, str]]) -> str:
@@ -427,86 +428,123 @@ async def stream_with_web_tool_interception(
                 tool_input: dict[str, Any] = (
                     json.loads(full_json_str) if full_json_str.strip() else {}
                 )
-                srv_tool_id = f"srvtoolu_{uuid.uuid4().hex}"
                 adj = intercepting_index + index_offset
 
+                # CamelCase names (WebSearch/WebFetch) are Claude Code agent tools.
+                # Normalize to lowercase for Tavily execution.
+                _tavily_name = (
+                    "web_search" if intercepting_tool_name in ("WebSearch", "web_search")
+                    else "web_fetch"
+                )
+                _is_agent_tool = bool(intercepting_tool_name) and intercepting_tool_name[0].isupper()
+
                 logger.info(
-                    "web_tool_intercept: name={} input={!r}",
+                    "web_tool_intercept: name={} tavily_name={} agent={} input={!r}",
                     intercepting_tool_name,
+                    _tavily_name,
+                    _is_agent_tool,
                     tool_input,
                 )
 
-                # Block A: server_tool_use
-                yield format_sse_event(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": adj,
-                        "content_block": {
-                            "type": SERVER_TOOL_USE,
-                            "id": srv_tool_id,
-                            "name": intercepting_tool_name,
-                            "input": tool_input,
-                        },
-                    },
-                )
-                yield format_sse_event(
-                    "content_block_stop",
-                    {"type": "content_block_stop", "index": adj},
-                )
-
                 # Execute Tavily
-                result_content, summary, result_block_type = (
+                _result_content, summary, _result_block_type = (
                     await _execute_tavily_tool(
-                        intercepting_tool_name,
+                        _tavily_name,
                         tool_input,
                         tavily_api_key=tavily_api_key,
                         verbose_client_errors=verbose_client_errors,
                     )
                 )
 
-                # Block B: web_search_tool_result / web_fetch_tool_result
-                yield format_sse_event(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": adj + 1,
-                        "content_block": {
-                            "type": result_block_type,
-                            "tool_use_id": srv_tool_id,
-                            "content": result_content,
+                if _is_agent_tool:
+                    # For CamelCase agent tools: emit only a plain text block.
+                    # Claude Code doesn't understand server_tool_use format.
+                    # 1 original block → 1 text block  ⇒  offset unchanged
+                    yield format_sse_event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": adj,
+                            "content_block": {"type": "text", "text": ""},
                         },
-                    },
-                )
-                yield format_sse_event(
-                    "content_block_stop",
-                    {"type": "content_block_stop", "index": adj + 1},
-                )
+                    )
+                    yield format_sse_event(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": adj,
+                            "delta": {"type": "text_delta", "text": summary},
+                        },
+                    )
+                    yield format_sse_event(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": adj},
+                    )
+                    # 1:1 replacement — no index_offset change
+                else:
+                    srv_tool_id = f"srvtoolu_{uuid.uuid4().hex}"
+                    # Block A: server_tool_use
+                    yield format_sse_event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": adj,
+                            "content_block": {
+                                "type": SERVER_TOOL_USE,
+                                "id": srv_tool_id,
+                                "name": intercepting_tool_name,
+                                "input": tool_input,
+                            },
+                        },
+                    )
+                    yield format_sse_event(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": adj},
+                    )
 
-                # Block C: text summary
-                yield format_sse_event(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": adj + 2,
-                        "content_block": {"type": "text", "text": ""},
-                    },
-                )
-                yield format_sse_event(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": adj + 2,
-                        "delta": {"type": "text_delta", "text": summary},
-                    },
-                )
-                yield format_sse_event(
-                    "content_block_stop",
-                    {"type": "content_block_stop", "index": adj + 2},
-                )
+                    # Block B: web_search_tool_result / web_fetch_tool_result
+                    yield format_sse_event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": adj + 1,
+                            "content_block": {
+                                "type": _result_block_type,
+                                "tool_use_id": srv_tool_id,
+                                "content": _result_content,
+                            },
+                        },
+                    )
+                    yield format_sse_event(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": adj + 1},
+                    )
 
-                # 1 original block → 3 emitted blocks  ⇒  offset +2
-                index_offset += 2
+                    # Block C: text summary
+                    yield format_sse_event(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": adj + 2,
+                            "content_block": {"type": "text", "text": ""},
+                        },
+                    )
+                    yield format_sse_event(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": adj + 2,
+                            "delta": {"type": "text_delta", "text": summary},
+                        },
+                    )
+                    yield format_sse_event(
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": adj + 2},
+                    )
+
+                    # 1 original block → 3 emitted blocks  ⇒  offset +2
+                    index_offset += 2
+
                 intercepting_index = -1
                 did_intercept = True
                 continue

@@ -8,11 +8,12 @@ from api.models.anthropic import MessagesRequest, Tool
 
 _WEB_SEARCH_SYSTEM_INJECTION = (
     "\n\n<web_search_instruction>"
-    "You have access to a real-time web search tool (WebSearch / web_search). "
+    "You have access to a real-time web search tool called WebSearch. "
     "Whenever the user asks about current events, live data, today's news, weather, "
     "prices, scores, or anything that may have changed recently, you MUST call the "
-    "web_search tool to retrieve up-to-date information BEFORE answering. "
-    "Do NOT rely solely on your training data for time-sensitive queries."
+    "WebSearch tool with a relevant query to retrieve up-to-date information BEFORE answering. "
+    "Do NOT rely solely on your training data for time-sensitive queries. "
+    "Always use WebSearch for weather, news, prices, sports scores, and recent events."
     "</web_search_instruction>"
 )
 
@@ -103,6 +104,14 @@ def is_anthropic_server_tool_definition(tool: Tool) -> bool:
 def has_listed_anthropic_server_tools(request: MessagesRequest) -> bool:
     """True when tools include web_search / web_fetch-style entries (listed, forced or not)."""
     return any(is_anthropic_server_tool_definition(t) for t in (request.tools or []))
+
+
+_AGENT_WEB_TOOL_NAMES = frozenset({"WebSearch", "WebFetch"})
+
+
+def has_agent_web_tools(request: MessagesRequest) -> bool:
+    """True when Claude Code agent tools WebSearch / WebFetch are in the tools list."""
+    return any((t.name or "") in _AGENT_WEB_TOOL_NAMES for t in (request.tools or []))
 
 
 def strip_server_tools(request: MessagesRequest) -> MessagesRequest:

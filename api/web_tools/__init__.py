@@ -7,6 +7,7 @@ from .egress import (
 )
 from .request import (
     convert_server_tools_to_regular,
+    has_agent_web_tools,
     has_listed_anthropic_server_tools,
     inject_web_search_system_prompt,
     is_web_server_tool_request,
@@ -19,6 +20,7 @@ __all__ = [
     "WebFetchEgressViolation",
     "convert_server_tools_to_regular",
     "enforce_web_fetch_egress",
+    "has_agent_web_tools",
     "has_listed_anthropic_server_tools",
     "inject_web_search_system_prompt",
     "is_web_server_tool_request",
