@@ -25,16 +25,12 @@ from .models.responses import TokenCountResponse
 from .optimization_handlers import try_optimizations
 from .web_tools.egress import WebFetchEgressPolicy
 from .web_tools.request import (
-    convert_server_tools_to_regular,
     has_listed_anthropic_server_tools,
     is_web_server_tool_request,
     openai_chat_upstream_server_tool_error,
     strip_server_tools,
 )
-from .web_tools.streaming import (
-    stream_web_server_tool_response,
-    stream_with_web_tool_interception,
-)
+from .web_tools.streaming import stream_web_server_tool_response
 
 TokenCounter = Callable[[list[Any], str | list[Any] | None, list[Any] | None], int]
 
@@ -148,50 +144,10 @@ class ClaudeProxyService:
                             tavily_api_key=self._settings.tavily_api_key,
                         ),
                     )
-
-                # Auto tool_choice: convert server tools → regular tools so the
-                # model can call web_search/web_fetch, then intercept the
-                # tool_use in the response stream and execute via Tavily.
-                logger.info("Web tools listed: converting server tools to regular tools for provider")
-                converted_request = convert_server_tools_to_regular(routed.request)
-
-                provider = self._provider_getter(routed.resolved.provider_id)
-                provider.preflight_stream(
-                    converted_request,
-                    thinking_enabled=routed.resolved.thinking_enabled,
-                )
-
-                request_id = f"req_{uuid.uuid4().hex[:12]}"
-                logger.info(
-                    "API_REQUEST: request_id={} model={} messages={} web_tool_intercept=true",
-                    request_id,
-                    converted_request.model,
-                    len(converted_request.messages),
-                )
-                if self._settings.log_raw_api_payloads:
-                    logger.debug(
-                        "FULL_PAYLOAD [{}]: {}",
-                        request_id,
-                        converted_request.model_dump(),
-                    )
-
-                input_tokens = self._token_counter(
-                    converted_request.messages,
-                    converted_request.system,
-                    converted_request.tools,
-                )
-                return anthropic_sse_streaming_response(
-                    stream_with_web_tool_interception(
-                        provider.stream_response(
-                            converted_request,
-                            input_tokens=input_tokens,
-                            request_id=request_id,
-                            thinking_enabled=routed.resolved.thinking_enabled,
-                        ),
-                        tavily_api_key=self._settings.tavily_api_key,
-                        verbose_client_errors=self._settings.log_api_error_tracebacks,
-                    ),
-                )
+                # Auto tool_choice with server tools listed: fall through to
+                # normal provider routing. strip_server_tools() will remove the
+                # server tool definitions below. The CLI will issue a separate
+                # forced tool_choice request when it decides to search.
 
             optimized = try_optimizations(routed.request, self._settings)
             if optimized is not None:
