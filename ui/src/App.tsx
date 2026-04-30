@@ -232,8 +232,6 @@ export default function App() {
             // Background sync: replace optimistic message with canonical DB rows.
             // Retry up to 3 times to handle the race between the SSE stream ending
             // and the backend finally-block completing its INSERT.
-            // loadSessions is called after the DB write is confirmed so the
-            // auto-generated title is already set by the time we refresh the list.
             const delays = [100, 300, 600];
             for (let attempt = 0; attempt < delays.length; attempt++) {
               await new Promise<void>((r) => setTimeout(r, delays[attempt]));
@@ -242,10 +240,19 @@ export default function App() {
                 // Only replace once the assistant message has been persisted.
                 if (msgs[msgs.length - 1]?.role === "assistant") {
                   setMessages(msgs);
-                  // Wait a beat for the backend's title-update (runs after add_message
-                  // in the same finally block) to commit before refreshing sidebar.
-                  await new Promise<void>((r) => setTimeout(r, 300));
-                  void loadSessions();
+                  // Poll sessions until the title is updated (backend title-update
+                  // runs after add_message in the same finally block).
+                  for (let t = 0; t < 5; t++) {
+                    await new Promise<void>((r) => setTimeout(r, 200));
+                    const list = await api
+                      .listSessions(token)
+                      .catch(() => null);
+                    if (list) {
+                      setSessions(list);
+                      const s = list.find((x) => x.id === activeSessionId);
+                      if (!s || s.title !== "New Chat") break;
+                    }
+                  }
                   break;
                 }
               } catch {
@@ -264,7 +271,7 @@ export default function App() {
       );
       abortRef.current = ctrl;
     },
-    [token, activeSessionId, isStreaming, selectedModel, loadSessions]
+    [token, activeSessionId, isStreaming, selectedModel]
   );
 
   const handleResendMessage = useCallback(
