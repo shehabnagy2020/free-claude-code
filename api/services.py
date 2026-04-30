@@ -26,6 +26,7 @@ from .optimization_handlers import try_optimizations
 from .web_tools.egress import WebFetchEgressPolicy
 from .web_tools.request import (
     has_listed_anthropic_server_tools,
+    inject_web_search_system_prompt,
     is_web_server_tool_request,
     openai_chat_upstream_server_tool_error,
     strip_server_tools,
@@ -117,6 +118,10 @@ class ClaudeProxyService:
                 [t.name for t in (request_data.tools or [])],
                 request_data.tool_choice,
             )
+            if request_data.tools:
+                for t in request_data.tools:
+                    if t.name in ("web_search", "web_fetch") or (t.type and ("web_search" in t.type or "web_fetch" in t.type)):
+                        logger.info("  -> server tool detected: name={!r} type={!r}", t.name, t.type)
 
             routed = self._model_router.resolve_messages_request(request_data)
             logger.info(
@@ -175,7 +180,7 @@ class ClaudeProxyService:
                 # normal provider routing. strip_server_tools() will remove the
                 # server tool definitions below. The CLI will issue a separate
                 # forced tool_choice request when it decides to search.
-                logger.info("[4/6] WEB_TOOLS listed but not forced — stripping and routing to provider")
+                logger.info("[4/6] WEB_TOOLS listed but not forced — injecting system prompt and routing to provider")
 
             optimized = try_optimizations(routed.request, self._settings)
             if optimized is not None:
@@ -186,6 +191,12 @@ class ClaudeProxyService:
             # Strip Anthropic server tool definitions (web_search / web_fetch) before
             # forwarding — providers never handle these; the proxy does.
             forward_request = strip_server_tools(routed.request)
+
+            # When web tools were listed, inject a system prompt instruction so the
+            # model calls web_search instead of answering from training data.
+            if web_tools_listed and self._settings.enable_web_server_tools:
+                forward_request = inject_web_search_system_prompt(forward_request)
+                logger.info("[5b] Injected web_search system prompt instruction")
             stripped_tools = [t.name for t in (forward_request.tools or [])]
             logger.info(
                 "[5/6] FORWARD: provider={} model={} messages={} tools={}",

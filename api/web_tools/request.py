@@ -6,6 +6,16 @@ from typing import Any
 
 from api.models.anthropic import MessagesRequest, Tool
 
+_WEB_SEARCH_SYSTEM_INJECTION = (
+    "\n\n<web_search_instruction>"
+    "You have access to a real-time web search tool (WebSearch / web_search). "
+    "Whenever the user asks about current events, live data, today's news, weather, "
+    "prices, scores, or anything that may have changed recently, you MUST call the "
+    "web_search tool to retrieve up-to-date information BEFORE answering. "
+    "Do NOT rely solely on your training data for time-sensitive queries."
+    "</web_search_instruction>"
+)
+
 # Input schemas for converting server tools to regular tools.
 _WEB_SEARCH_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -267,3 +277,36 @@ def openai_chat_upstream_server_tool_error(
             "Set TAVILY_API_KEY and ENABLE_WEB_SERVER_TOOLS=true in your .env to enable them."
         )
     return None
+
+
+def inject_web_search_system_prompt(request: MessagesRequest) -> MessagesRequest:
+    """Append a web-search instruction to the system prompt.
+
+    Forces the model to call web_search for real-time queries instead of
+    reasoning its way to a training-data answer (especially with thinking enabled).
+    No-ops if the instruction is already present (idempotent).
+    """
+    injection = _WEB_SEARCH_SYSTEM_INJECTION
+    system = request.system
+
+    # Already injected — skip.
+    if isinstance(system, str) and injection.strip() in system:
+        return request
+    if isinstance(system, list) and any(
+        isinstance(b, dict) and injection.strip() in b.get("text", "")
+        for b in system
+    ):
+        return request
+
+    data = request.model_dump()
+    if system is None:
+        data["system"] = injection.strip()
+    elif isinstance(system, str):
+        data["system"] = system + injection
+    else:
+        # List of SystemContent blocks — append a new text block.
+        blocks = [b if isinstance(b, dict) else b.model_dump() for b in system]
+        blocks.append({"type": "text", "text": injection.strip()})
+        data["system"] = blocks
+
+    return MessagesRequest(**data)

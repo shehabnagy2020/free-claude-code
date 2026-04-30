@@ -8,6 +8,7 @@ from .egress import (
 from .request import (
     convert_server_tools_to_regular,
     has_listed_anthropic_server_tools,
+    inject_web_search_system_prompt,
     is_web_server_tool_request,
     strip_server_tools,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "convert_server_tools_to_regular",
     "enforce_web_fetch_egress",
     "has_listed_anthropic_server_tools",
+    "inject_web_search_system_prompt",
     "is_web_server_tool_request",
     "stream_web_server_tool_response",
     "stream_with_web_tool_interception",
