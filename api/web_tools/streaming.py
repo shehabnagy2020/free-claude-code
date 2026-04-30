@@ -62,6 +62,7 @@ async def stream_web_server_tool_response(
     """
     tool_name = forced_server_tool_name(request)
     if tool_name is None or not has_tool_named(request, tool_name):
+        logger.warning("stream_web_server_tool_response: no forced tool found, returning empty")
         return
 
     text = forced_tool_turn_text(request)
@@ -117,6 +118,13 @@ async def stream_web_server_tool_response(
         "content_block_stop", {"type": "content_block_stop", "index": 0}
     )
 
+    logger.info(
+        "web_server_tool: tool={} input={!r} tavily_key_set={}",
+        tool_name,
+        tool_input,
+        bool(tavily_api_key),
+    )
+
     try:
         if tool_name == "web_search":
             query = str(tool_input["query"])
@@ -124,7 +132,9 @@ async def stream_web_server_tool_response(
                 raise RuntimeError(
                     "TAVILY_API_KEY is not configured. Set it in your .env to enable web search."
                 )
+            logger.info("tavily_search: calling API for query={!r}", query)
             results = await _tavily.tavily_search(tavily_api_key, query)
+            logger.info("tavily_search: got {} results", len(results))
             result_content: Any = [
                 {
                     "type": "web_search_result",
@@ -140,6 +150,7 @@ async def stream_web_server_tool_response(
                 raise RuntimeError(
                     "TAVILY_API_KEY is not configured. Set it in your .env to enable web fetch."
                 )
+            logger.info("tavily_fetch: calling API for url={!r}", str(tool_input.get("url", "")))
             fetched = await _tavily.tavily_fetch(
                 tavily_api_key, str(tool_input["url"])
             )
@@ -162,6 +173,12 @@ async def stream_web_server_tool_response(
             result_block_type = WEB_FETCH_TOOL_RESULT
     except Exception as error:
         fetch_url = str(tool_input["url"]) if tool_name == "web_fetch" else None
+        logger.error(
+            "web_server_tool FAILED tool={} exc_type={} exc={}",
+            tool_name,
+            type(error).__name__,
+            error,
+        )
         outbound._log_web_tool_failure(tool_name, error, fetch_url=fetch_url)
         result_block_type = _result_block_for_tool[tool_name]
         result_content = {

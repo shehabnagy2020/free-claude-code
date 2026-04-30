@@ -18,16 +18,26 @@ async def tavily_search(api_key: str, query: str) -> list[dict[str, str]]:
     """Run a web search via Tavily REST API."""
     logger.debug("tavily_search query={!r}", query)
     payload = {
-        "api_key": api_key,
         "query": query,
         "search_depth": "basic",
         "max_results": _MAX_SEARCH_RESULTS,
     }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S) as client:
-        response = await client.post(_SEARCH_URL, json=payload)
+        response = await client.post(_SEARCH_URL, json=payload, headers=headers)
+    if response.status_code != 200:
+        logger.warning(
+            "tavily_search failed status={} body={!r}",
+            response.status_code,
+            response.text[:500],
+        )
         response.raise_for_status()
     data = response.json()
     results = data.get("results", [])
+    if not results:
+        logger.warning("tavily_search returned 0 results for query={!r}", query)
+    else:
+        logger.info("tavily_search returned {} results for query={!r}", len(results), query)
     return [
         {
             "title": str(r.get("title", r.get("url", ""))),
@@ -41,9 +51,16 @@ async def tavily_search(api_key: str, query: str) -> list[dict[str, str]]:
 async def tavily_fetch(api_key: str, url: str) -> dict[str, str]:
     """Fetch and extract page content via Tavily REST API."""
     logger.debug("tavily_fetch url={!r}", url)
-    payload = {"api_key": api_key, "urls": [url]}
+    payload = {"urls": [url]}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S) as client:
-        response = await client.post(_EXTRACT_URL, json=payload)
+        response = await client.post(_EXTRACT_URL, json=payload, headers=headers)
+    if response.status_code != 200:
+        logger.warning(
+            "tavily_fetch failed status={} body={!r}",
+            response.status_code,
+            response.text[:500],
+        )
         response.raise_for_status()
     data = response.json()
     results = data.get("results", [])

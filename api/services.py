@@ -130,7 +130,10 @@ class ClaudeProxyService:
                         routed.request.system,
                         routed.request.tools,
                     )
-                    logger.info("Optimization: Handling forced web server tool via Tavily")
+                    logger.info(
+                        "Optimization: Handling forced web server tool via Tavily key_set={}",
+                        bool(self._settings.tavily_api_key),
+                    )
                     egress = WebFetchEgressPolicy(
                         allow_private_network_targets=self._settings.web_fetch_allow_private_networks,
                         allowed_schemes=self._settings.web_fetch_allowed_scheme_set(),
