@@ -236,6 +236,15 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     # Save user message. Also bumps sessions.updated_at.
     await db.add_message(body.session_id, "user", user_content_for_db)
 
+    # Auto-title: set on the first user turn so the sidebar updates immediately,
+    # before the stream starts (no race with the finally block).
+    user_text_for_title = body.content.strip() or "🖼️ Image"
+    if not history:  # first message in this session
+        new_title = user_text_for_title[:60].replace("\n", " ")
+        if len(user_text_for_title) > 60:
+            new_title += "…"
+        await db.update_session(body.session_id, title=new_title)
+
     # Build messages list: prior history + new user turn (no extra DB fetch needed)
     def _parse_content(raw: str) -> list[dict[str, Any]] | str:
         if raw.startswith("["):
@@ -268,7 +277,6 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     provider_iter: AsyncIterator[str] = provider_resp.body_iterator  # type: ignore[union-attr]
 
     session_id = body.session_id
-    user_text_for_title = body.content.strip() or "🖼️ Image"
 
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
@@ -294,13 +302,6 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
             if full_text:
                 try:
                     await db.add_message(session_id, "assistant", full_text)
-                    # Auto-title: lightweight single-row query
-                    current_title = await db.get_session_title(session_id)
-                    if current_title == "New Chat":
-                        new_title = user_text_for_title[:60].replace("\n", " ")
-                        if len(user_text_for_title) > 60:
-                            new_title += "…"
-                        await db.update_session(session_id, title=new_title)
                 except Exception as save_err:
                     logger.warning(
                         "UI: failed to persist assistant message: {}",

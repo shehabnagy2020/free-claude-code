@@ -195,6 +195,10 @@ export default function App() {
       setIsStreaming(true);
       setStreamingText("");
 
+      // Title is set server-side before the stream starts on the first turn.
+      // Refresh the sidebar immediately so the name appears without waiting.
+      const isFirstTurn = messages.length === 0;
+      if (isFirstTurn) void loadSessions();
       let accText = "";
       const ctrl = api.streamChat(
         token,
@@ -237,22 +241,9 @@ export default function App() {
               await new Promise<void>((r) => setTimeout(r, delays[attempt]));
               try {
                 const msgs = await api.fetchMessages(token, activeSessionId);
-                // Only replace once the assistant message has been persisted.
                 if (msgs[msgs.length - 1]?.role === "assistant") {
                   setMessages(msgs);
-                  // Poll sessions until the title is updated (backend title-update
-                  // runs after add_message in the same finally block).
-                  for (let t = 0; t < 5; t++) {
-                    await new Promise<void>((r) => setTimeout(r, 200));
-                    const list = await api
-                      .listSessions(token)
-                      .catch(() => null);
-                    if (list) {
-                      setSessions(list);
-                      const s = list.find((x) => x.id === activeSessionId);
-                      if (!s || s.title !== "New Chat") break;
-                    }
-                  }
+                  void loadSessions();
                   break;
                 }
               } catch {
@@ -271,7 +262,7 @@ export default function App() {
       );
       abortRef.current = ctrl;
     },
-    [token, activeSessionId, isStreaming, selectedModel]
+    [token, activeSessionId, isStreaming, selectedModel, messages, loadSessions]
   );
 
   const handleResendMessage = useCallback(
