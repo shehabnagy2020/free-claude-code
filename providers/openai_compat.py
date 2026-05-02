@@ -23,7 +23,6 @@ from core.anthropic import (
     append_request_id,
     map_stop_reason,
 )
-from core.chatter import ChatterStripper
 from providers.base import BaseProvider, ProviderConfig
 from providers.error_mapping import (
     map_error,
@@ -258,7 +257,6 @@ class OpenAIChatTransport(BaseProvider):
 
         think_parser = ThinkTagParser()
         heuristic_parser = HeuristicToolParser()
-        chatter_stripper = ChatterStripper()
         finish_reason = None
         usage_info = None
 
@@ -323,11 +321,9 @@ class OpenAIChatTransport(BaseProvider):
                                     )
 
                                     if filtered_text:
-                                        stripped = chatter_stripper.feed(filtered_text)
-                                        if stripped:
-                                            for event in sse.ensure_text_block():
-                                                yield event
-                                            yield sse.emit_text_delta(stripped)
+                                        for event in sse.ensure_text_block():
+                                            yield event
+                                        yield sse.emit_text_delta(filtered_text)
 
                                     for tool_use in detected_tools:
                                         for event in _iter_heuristic_tool_use_sse(
@@ -425,13 +421,6 @@ class OpenAIChatTransport(BaseProvider):
         for tool_use in heuristic_parser.flush():
             for event in _iter_heuristic_tool_use_sse(sse, tool_use):
                 yield event
-
-        # Flush any buffered chatter-held text before closing blocks.
-        chatter_held = chatter_stripper.flush()
-        if chatter_held:
-            for event in sse.ensure_text_block():
-                yield event
-            yield sse.emit_text_delta(chatter_held)
 
         has_started_tool = any(s.started for s in sse.blocks.tool_states.values())
         has_content_blocks = (

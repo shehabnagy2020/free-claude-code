@@ -14,6 +14,7 @@ from loguru import logger
 from config.settings import Settings
 from core.anthropic import get_token_count, get_user_facing_error_message
 from core.anthropic.sse import ANTHROPIC_SSE_RESPONSE_HEADERS
+from core.chatter import ChatterStripper
 from core.nudge import CONTEXT_MODE_NUDGE
 from providers.base import BaseProvider
 from providers.exceptions import InvalidRequestError, ProviderError
@@ -64,6 +65,111 @@ async def _enriched_stream(
         request_id=request_id,
         thinking_enabled=thinking_enabled,
     ):
+        yield chunk
+
+
+async def _chatter_stripped_stream(
+    stream: AsyncIterator[str],
+) -> AsyncGenerator[str, None]:
+    """Wrap an SSE stream and strip opening chatter from the first text block.
+
+    Buffers text_delta events from the first text content block, applies
+    :class:`ChatterStripper` on flush, and re-emits cleaned text. All other
+    events pass through unchanged.
+    """
+    import json as _json
+
+    stripper = ChatterStripper()
+    # Accumulate raw text from the first text block so we can re-emit
+    # the cleaned version when the block ends.
+    buffered_text = ""
+    text_index: int | None = None
+    flushed = False
+
+    async for chunk in stream:
+        if flushed:
+            yield chunk
+            continue
+
+        # Detect text_delta events.
+        is_text_delta = '"text_delta"' in chunk
+        is_block_start = '"content_block_start"' in chunk
+        is_block_stop = '"content_block_stop"' in chunk
+        is_message_stop = '"message_stop"' in chunk
+
+        if is_block_start and '"type":"text"' in chunk:
+            # Remember which content block index is the text one.
+            try:
+                for line in chunk.splitlines():
+                    if line.startswith("data:"):
+                        evt = _json.loads(line[5:].strip())
+                        if evt.get("type") == "content_block_start":
+                            text_index = evt.get("index")
+                            break
+            except (_json.JSONDecodeError, KeyError):
+                pass
+            # Pass the block_start through — we'll fix up text later if needed.
+            yield chunk
+            continue
+
+        if is_text_delta:
+            # Extract text, feed to stripper (which buffers until it has enough).
+            try:
+                for line in chunk.splitlines():
+                    if line.startswith("data:"):
+                        evt = _json.loads(line[5:].strip())
+                        delta = evt.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            buffered_text += delta.get("text", "")
+                            # Feed to stripper; it returns "" while buffering.
+                            _ = stripper.feed(delta.get("text", ""))
+            except (_json.JSONDecodeError, KeyError):
+                pass
+            # Swallow the event — we'll re-emit cleaned text on flush.
+            continue
+
+        if is_block_stop or is_message_stop:
+            # End of first text block or message — flush the stripper.
+            held = stripper.flush()
+            if held != buffered_text:
+                # Chatter was stripped — emit the cleaned text as a single delta.
+                if held:
+                    cleaned_event = {
+                        "type": "content_block_delta",
+                        "index": text_index or 0,
+                        "delta": {"type": "text_delta", "text": held},
+                    }
+                    yield f"data: {_json.dumps(cleaned_event, separators=(',', ':'))}\n\n"
+                # else: entire text was filler, emit nothing.
+                buffered_text = ""
+                flushed = True
+            else:
+                # No stripping — emit the buffered text as-is.
+                if buffered_text:
+                    raw_event = {
+                        "type": "content_block_delta",
+                        "index": text_index or 0,
+                        "delta": {"type": "text_delta", "text": buffered_text},
+                    }
+                    yield f"data: {_json.dumps(raw_event, separators=(',', ':'))}\n\n"
+                buffered_text = ""
+                flushed = True
+            yield chunk
+            continue
+
+        # Non-text events (thinking, tool_use, etc.) — pass through.
+        # If we hit a non-text event while buffering text, flush first.
+        if buffered_text:
+            held = stripper.flush()
+            if held:
+                raw_event = {
+                    "type": "content_block_delta",
+                    "index": text_index or 0,
+                    "delta": {"type": "text_delta", "text": held},
+                }
+                yield f"data: {_json.dumps(raw_event, separators=(',', ':'))}\n\n"
+            buffered_text = ""
+            flushed = True
         yield chunk
 
 
@@ -305,7 +411,9 @@ class ClaudeProxyService:
                     request_id=request_id,
                     thinking_enabled=routed.resolved.thinking_enabled,
                 )
-            return anthropic_sse_streaming_response(provider_stream)
+            return anthropic_sse_streaming_response(
+                _chatter_stripped_stream(provider_stream)
+            )
 
         except ProviderError:
             raise

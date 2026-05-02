@@ -6,6 +6,7 @@
 
 - Install astral uv using "curl -LsSf https://astral.sh/uv/install.sh | sh" if not already installed and if already installed then update it to the latest version
 - Install Python 3.14 using `uv python install 3.14` if not already installed
+- Run `npm install` at project root to install Node.js dependencies (context-mode sidecar).
 - Always use `uv run` to run files instead of the global `python` command.
 - Current uv ruff formatter is set to py314 which has supports multiple exception types without paranthesis (except TypeError, ValueError:)
 - Read `.env.example` for environment variables.
@@ -91,6 +92,16 @@
 - **Enrichment** (`api/web_tools/enrichment.py`): Auto-fills empty `WebSearch`/`WebFetch` tool_result blocks from Claude Code with Tavily data.
 - **Module-level caches**: `_REALTIME_KEYWORDS` frozenset built once at import; Tavily client reuses httpx connections.
 - **Keywords**: `today`, `weather`, `news`, `price`, `score`, `trending`, `search`, `who is`, `what is`, etc. (see `_REALTIME_KEYWORDS` in `api/ui_routes.py`).
+
+## CONTEXT-MODE INTEGRATION
+
+- **Sidecar process**: `api/runtime.py` launches `npx -y context-mode` as a subprocess on `AppRuntime.startup()`, kills on `shutdown()` + `atexit` safety net. Log: `Context-mode sidecar started (pid=...)`.
+- **System prompt nudge**: `core/nudge.py` contains a ~115-token sandbox routing nudge. Injected into every request's system prompt via `_inject_context_mode_system_prompt()` in `api/services.py` (follows the `inject_web_search_system_prompt` pattern). Idempotent (skips if `"CONTEXT-MODE SANDBOX"` already present). Log: `[5c] Injected context-mode sandbox nudge (~115 tokens)`.
+- **Output chatter stripping**: `core/chatter.py` provides `ChatterStripper` — a sentence-based filter that strips local-model filler prefixes ("Certainly! I can help with that.", "Of course! Let me assist...", etc.) from the first text block of responses. Applied via `_chatter_stripped_stream()` wrapper in `api/services.py` which wraps **all** provider SSE streams (both openai_chat and anthropic_messages transports). Colon-aware splitting preserves content after colons. Log: `CHATTER_STRIP: removed N chars from '...' → '...'`.
+- **No provider-specific stripping**: Chatter stripping is unified at the services layer, not in individual provider transports. The OpenAI-compat path (`providers/openai_compat.py`) does NOT have its own ChatterStripper.
+- **package.json**: Root-level `package.json` declares `context-mode` as an npm dependency. Run `npm install` before starting the proxy.
+- **Nudge + Tavily coexistence**: The web search system prompt instruction (`[5b]`) and context-mode nudge (`[5c]`) are both appended to the system prompt. The nudge clarifies that the proxy's `web_search`/`web_fetch` tools (Tavily-handled) are fine to use — only raw `WebFetch` (which dumps HTML into context) is blocked.
+- **Pipeline order**: REQUEST → ROUTED → WEB_TOOLS → OPTIMIZATION → STRIP_SERVER_TOOLS → INJECT_WEB_SEARCH → INJECT_CONTEXT_MODE_NUDGE → FORWARD → STREAM (with chatter stripping).
 
 ## IMAGE SUPPORT
 
