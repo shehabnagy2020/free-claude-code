@@ -93,6 +93,15 @@
 - **Module-level caches**: `_REALTIME_KEYWORDS` frozenset built once at import; Tavily client reuses httpx connections.
 - **Keywords**: `today`, `weather`, `news`, `price`, `score`, `trending`, `search`, `who is`, `what is`, etc. (see `_REALTIME_KEYWORDS` in `api/ui_routes.py`).
 
+### Global Memory (UI)
+
+- **Purpose**: Persist user facts across all chat sessions (e.g. "my name is Shehab", "my age is 28").
+- **Storage**: SQLite `global_memory` table in `ui_chat.db` — key/value with upsert.
+- **Real-time extraction** (`api/ui_routes.py`): When a user message contains memory keywords ("remember", "keep in mind", "note", "don't forget", "make sure", "save", "write down"), the fact is extracted via regex and immediately upserted to the DB — no waiting for background summary.
+- **System prompt injection**: Global memory is **always** injected into the system prompt on every turn. On follow-up turns, session summary is also included. This ensures facts persist across all sessions immediately.
+- **Background summary** (`api/summary.py`): After each chat turn, a summary is generated and `REMEMBER:`/`KEEP:`/`NOTE:`/`DON'T FORGET:`/`SAVE:` tagged items are extracted to global memory as a secondary path. The summary also prepends current global memory so it stays embedded in session context.
+- **Dedup**: `_extract_memory_from_text` filters filler words ("that", "this", "it") and deduplicates overlapping captures (e.g. "save my phone number" vs "my phone number" — keeps shorter).
+
 ## CONTEXT-MODE INTEGRATION
 
 - **Sidecar process**: `api/runtime.py` launches `npx -y context-mode` as a subprocess on `AppRuntime.startup()`, kills on `shutdown()` + `atexit` safety net. Log: `Context-mode sidecar started (pid=...)`.

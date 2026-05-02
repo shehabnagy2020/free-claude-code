@@ -322,6 +322,7 @@ Features:
 - **Session history**: SQLite-backed chat history with searchable sidebar
 - **Image support**: Attach PNG, JPEG, GIF, WebP images to messages
 - **Proactive web search**: Auto-detects real-time queries (weather, news, prices, scores) and fetches Tavily results
+- **Global memory**: Say "remember my name is Shehab" in one chat, ask "what's my name?" in a new chat — it remembers. Keywords: remember, keep in mind, note, don't forget, save, write down.
 - **Streaming responses**: Real-time SSE streaming with optimistic UI updates
 
 ### Discord And Telegram Bots
