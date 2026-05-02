@@ -745,18 +745,18 @@ def _build_provider_sse_stream(
 
     events: list[str] = []
     events.append(
-        f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "model": "m", "stop_reason": None, "usage": {"input_tokens": 10, "output_tokens": 1}}})}\n\n'
+        f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': 'msg_1', 'type': 'message', 'role': 'assistant', 'content': [], 'model': 'm', 'stop_reason': None, 'usage': {'input_tokens': 10, 'output_tokens': 1}}})}\n\n"
     )
     idx = 0
     if text_before:
         events.append(
-            f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": idx, "content_block": {"type": "text", "text": ""}})}\n\n'
+            f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
         )
         events.append(
-            f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": idx, "delta": {"type": "text_delta", "text": text_before}})}\n\n'
+            f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': idx, 'delta': {'type': 'text_delta', 'text': text_before}})}\n\n"
         )
         events.append(
-            f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": idx})}\n\n'
+            f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': idx})}\n\n"
         )
         idx += 1
 
@@ -764,22 +764,22 @@ def _build_provider_sse_stream(
     for tool_name, tool_input in tool_calls:
         tool_id = f"toolu_{idx}"
         events.append(
-            f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": idx, "content_block": {"type": "tool_use", "id": tool_id, "name": tool_name, "input": {}}})}\n\n'
+            f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': idx, 'content_block': {'type': 'tool_use', 'id': tool_id, 'name': tool_name, 'input': {}}})}\n\n"
         )
         events.append(
-            f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": idx, "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_input)}})}\n\n'
+            f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': idx, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(tool_input)}})}\n\n"
         )
         events.append(
-            f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": idx})}\n\n'
+            f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': idx})}\n\n"
         )
         idx += 1
 
     stop_reason = "tool_use" if has_tool_use else "end_turn"
     events.append(
-        f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop_reason}, "usage": {"output_tokens": 10}})}\n\n'
+        f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason}, 'usage': {'output_tokens': 10}})}\n\n"
     )
     events.append(
-        f'event: message_stop\ndata: {json.dumps({"type": "message_stop"})}\n\n'
+        f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
     )
     return events
 
@@ -789,7 +789,13 @@ async def test_interception_converts_web_search_to_server_tool_use(monkeypatch):
     from api.web_tools.streaming import stream_with_web_tool_interception
 
     async def fake_search(_api_key: str, query: str) -> list[dict[str, str]]:
-        return [{"title": "Weather Cairo", "url": "https://weather.com/cairo", "snippet": "Sunny 35C"}]
+        return [
+            {
+                "title": "Weather Cairo",
+                "url": "https://weather.com/cairo",
+                "snippet": "Sunny 35C",
+            }
+        ]
 
     monkeypatch.setattr("api.web_tools.tavily.tavily_search", fake_search)
 
@@ -820,7 +826,10 @@ async def test_interception_converts_web_search_to_server_tool_use(monkeypatch):
     assert starts[0].data["content_block"]["name"] == "web_search"
     assert starts[0].data["content_block"]["input"] == {"query": "Cairo weather"}
     assert starts[1].data["content_block"]["type"] == "web_search_tool_result"
-    assert starts[1].data["content_block"]["content"][0]["url"] == "https://weather.com/cairo"
+    assert (
+        starts[1].data["content_block"]["content"][0]["url"]
+        == "https://weather.com/cairo"
+    )
     assert starts[2].data["content_block"]["type"] == "text"
 
     # stop_reason should be end_turn (not tool_use)

@@ -105,7 +105,7 @@ def get_token_count(
                     )
                     try:
                         total_tokens += _encode(json.dumps(block))
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         total_tokens += _encode(str(block))
 
     if tools:

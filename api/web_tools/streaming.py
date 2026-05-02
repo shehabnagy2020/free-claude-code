@@ -64,7 +64,9 @@ async def stream_web_server_tool_response(
     """
     tool_name = forced_server_tool_name(request)
     if tool_name is None or not has_tool_named(request, tool_name):
-        logger.warning("stream_web_server_tool_response: no forced tool found, returning empty")
+        logger.warning(
+            "stream_web_server_tool_response: no forced tool found, returning empty"
+        )
         return
 
     text = forced_tool_turn_text(request)
@@ -152,10 +154,10 @@ async def stream_web_server_tool_response(
                 raise RuntimeError(
                     "TAVILY_API_KEY is not configured. Set it in your .env to enable web fetch."
                 )
-            logger.info("tavily_fetch: calling API for url={!r}", str(tool_input.get("url", "")))
-            fetched = await _tavily.tavily_fetch(
-                tavily_api_key, str(tool_input["url"])
+            logger.info(
+                "tavily_fetch: calling API for url={!r}", str(tool_input.get("url", ""))
             )
+            fetched = await _tavily.tavily_fetch(tavily_api_key, str(tool_input["url"]))
             result_content = {
                 "type": "web_fetch_result",
                 "url": fetched["url"],
@@ -248,6 +250,7 @@ async def stream_web_server_tool_response(
 # SSE parsing helper
 # ---------------------------------------------------------------------------
 
+
 def _parse_sse_event_string(sse_string: str) -> tuple[str, dict[str, Any]]:
     """Parse a formatted SSE event string into (event_type, data_dict)."""
     event_type = ""
@@ -269,6 +272,7 @@ def _parse_sse_event_string(sse_string: str) -> tuple[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Tavily execution helper
 # ---------------------------------------------------------------------------
+
 
 async def _execute_tavily_tool(
     tool_name: str,
@@ -348,6 +352,7 @@ async def _execute_tavily_tool(
 # Stream interception: intercept model tool_use for web_search/web_fetch
 # ---------------------------------------------------------------------------
 
+
 async def stream_with_web_tool_interception(
     provider_stream: AsyncIterator[str],
     *,
@@ -369,11 +374,11 @@ async def stream_with_web_tool_interception(
     (with index adjustment when interception adds extra blocks).
     """
     # ---- state ----
-    intercepting_index: int = -1       # block index currently being intercepted
+    intercepting_index: int = -1  # block index currently being intercepted
     intercepting_tool_name: str = ""
     input_json_parts: list[str] = []
-    index_offset: int = 0              # cumulative extra blocks inserted
-    did_intercept: bool = False        # whether any tool_use was intercepted
+    index_offset: int = 0  # cumulative extra blocks inserted
+    did_intercept: bool = False  # whether any tool_use was intercepted
 
     async for raw_event in provider_stream:
         event_type, data = _parse_sse_event_string(raw_event)
@@ -434,10 +439,13 @@ async def stream_with_web_tool_interception(
                 # CamelCase names (WebSearch/WebFetch) are Claude Code agent tools.
                 # Normalize to lowercase for Tavily execution.
                 _tavily_name = (
-                    "web_search" if intercepting_tool_name in ("WebSearch", "web_search")
+                    "web_search"
+                    if intercepting_tool_name in ("WebSearch", "web_search")
                     else "web_fetch"
                 )
-                _is_agent_tool = bool(intercepting_tool_name) and intercepting_tool_name[0].isupper()
+                _is_agent_tool = (
+                    bool(intercepting_tool_name) and intercepting_tool_name[0].isupper()
+                )
 
                 logger.info(
                     "web_tool_intercept: name={} tavily_name={} agent={} input={!r}",
@@ -448,13 +456,15 @@ async def stream_with_web_tool_interception(
                 )
 
                 # Execute Tavily
-                _result_content, summary, _result_block_type = (
-                    await _execute_tavily_tool(
-                        _tavily_name,
-                        tool_input,
-                        tavily_api_key=tavily_api_key,
-                        verbose_client_errors=verbose_client_errors,
-                    )
+                (
+                    _result_content,
+                    summary,
+                    _result_block_type,
+                ) = await _execute_tavily_tool(
+                    _tavily_name,
+                    tool_input,
+                    tavily_api_key=tavily_api_key,
+                    verbose_client_errors=verbose_client_errors,
                 )
 
                 if _is_agent_tool:

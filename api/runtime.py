@@ -73,8 +73,12 @@ class AppRuntime:
     settings: Settings
     _provider_registry: ProviderRegistry | None = field(default=None, init=False)
     _context_mode_process: subprocess.Popen | None = field(default=None, init=False)
-    _context_mode_health_timer: asyncio.TimerHandle | None = field(default=None, init=False)
-    _context_mode_restart_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _context_mode_health_timer: asyncio.TimerHandle | None = field(
+        default=None, init=False
+    )
+    _context_mode_restart_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False
+    )
     messaging_platform: MessagingPlatform | None = None
     message_handler: ClaudeMessageHandler | None = None
     cli_manager: CLISessionManager | None = None
@@ -224,7 +228,9 @@ class AppRuntime:
         if self._context_mode_process is None:
             logger.debug("Context-mode sidecar: ALREADY STOPPED")
             return
-        logger.info("Context-mode sidecar: STOPPING (pid={})...", self._context_mode_process.pid)
+        logger.info(
+            "Context-mode sidecar: STOPPING (pid={})...", self._context_mode_process.pid
+        )
         try:
             os.killpg(os.getpgid(self._context_mode_process.pid), signal.SIGTERM)
             self._context_mode_process.wait(timeout=3)
@@ -253,7 +259,7 @@ class AppRuntime:
         try:
             os.killpg(os.getpgid(self._context_mode_process.pid), signal.SIGTERM)
             self._context_mode_process.wait(timeout=3)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
+        except ProcessLookupError, subprocess.TimeoutExpired:
             if self._context_mode_process:
                 self._context_mode_process.kill()
         except Exception:

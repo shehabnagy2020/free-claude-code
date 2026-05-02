@@ -274,7 +274,10 @@ def transform_native_sse_block_event(
                 state,
                 upstream_index,
                 block_type=block_kind,
-                last_start_block={k: dict(v) if isinstance(v, dict) else v for k, v in synthetic_block.items()},
+                last_start_block={
+                    k: dict(v) if isinstance(v, dict) else v
+                    for k, v in synthetic_block.items()
+                },
             )
             start_payload = {
                 "type": "content_block_start",

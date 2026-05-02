@@ -184,9 +184,7 @@ def convert_server_tools_to_regular(request: MessagesRequest) -> MessagesRequest
         data["tools"] = [t.model_dump() for t in new_tools]
 
     if messages_dirty:
-        data["messages"] = [
-            _sanitize_message_blocks(msg) for msg in data["messages"]
-        ]
+        data["messages"] = [_sanitize_message_blocks(msg) for msg in data["messages"]]
 
     return MessagesRequest(**data)
 
@@ -221,12 +219,14 @@ def _sanitize_message_blocks(message: dict[str, Any]) -> dict[str, Any]:
         bt = _block_type(block)
         if bt == "server_tool_use":
             # Convert to regular tool_use.
-            new_content.append({
-                "type": "tool_use",
-                "id": block.get("id", ""),
-                "name": block.get("name", ""),
-                "input": block.get("input", {}),
-            })
+            new_content.append(
+                {
+                    "type": "tool_use",
+                    "id": block.get("id", ""),
+                    "name": block.get("name", ""),
+                    "input": block.get("input", {}),
+                }
+            )
         elif bt in ("web_search_tool_result", "web_fetch_tool_result"):
             # Convert to a text block summarising the result.
             result_content = block.get("content", "")
@@ -302,8 +302,7 @@ def inject_web_search_system_prompt(request: MessagesRequest) -> MessagesRequest
     if isinstance(system, str) and injection.strip() in system:
         return request
     if isinstance(system, list) and any(
-        isinstance(b, dict) and injection.strip() in b.get("text", "")
-        for b in system
+        isinstance(b, dict) and injection.strip() in b.get("text", "") for b in system
     ):
         return request
 

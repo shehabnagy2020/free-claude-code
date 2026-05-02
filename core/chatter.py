@@ -14,17 +14,69 @@ _SENTENCE_SPLIT = re.compile(r"[.!?]\s+")
 
 # Words/phrases that signal actual content is starting, not more filler.
 # Excludes ambiguous starters like "let " or "here" that also begin filler.
-_CONTENT_STARTERS = frozenset({
-    "first", "next", "then", "now", "to", "for", "if", "when",
-    "after", "before", "with", "using", "by", "start", "create",
-    "use", "run", "check", "see", "try", "add", "open", "write",
-    "build", "install", "update", "delete", "remove", "change",
-    "modify", "set", "copy", "move", "rename", "replace",
-    "def ", "class ", "import ", "from ", "return ", "async ", "await ",
-    "const ", "var ", "function ", "#!", "//", "/*", "```",
-    "step", "note", "important", "warning", "caution",
-    "the", "this", "that", "these", "those",
-})
+_CONTENT_STARTERS = frozenset(
+    {
+        "first",
+        "next",
+        "then",
+        "now",
+        "to",
+        "for",
+        "if",
+        "when",
+        "after",
+        "before",
+        "with",
+        "using",
+        "by",
+        "start",
+        "create",
+        "use",
+        "run",
+        "check",
+        "see",
+        "try",
+        "add",
+        "open",
+        "write",
+        "build",
+        "install",
+        "update",
+        "delete",
+        "remove",
+        "change",
+        "modify",
+        "set",
+        "copy",
+        "move",
+        "rename",
+        "replace",
+        "def ",
+        "class ",
+        "import ",
+        "from ",
+        "return ",
+        "async ",
+        "await ",
+        "const ",
+        "var ",
+        "function ",
+        "#!",
+        "//",
+        "/*",
+        "```",
+        "step",
+        "note",
+        "important",
+        "warning",
+        "caution",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+    }
+)
 
 # Known chatter opening keywords (case-insensitive prefix match).
 _CHATTER_KEYWORDS = (
@@ -208,7 +260,7 @@ def _split_at_colon(sentence: str) -> str | None:
     if ":" not in sentence:
         return None
     idx = sentence.index(":")
-    after = sentence[idx + 1:].strip()
+    after = sentence[idx + 1 :].strip()
     if not after:
         return None
     # The part after the colon should look like actual content.
@@ -232,11 +284,25 @@ def _is_filler_sentence(sentence: str) -> bool:
         return False
     # Contains help/assist/explain keywords.
     has_filler_word = any(
-        w in s for w in (
-            "help", "assist", "happy", "glad", "sure", "course",
-            "certainly", "absolutely", "question", "explain",
-            "walk you", "break it", "break that",
-            "i'll do", "i will do", "i can do", "my plan",
+        w in s
+        for w in (
+            "help",
+            "assist",
+            "happy",
+            "glad",
+            "sure",
+            "course",
+            "certainly",
+            "absolutely",
+            "question",
+            "explain",
+            "walk you",
+            "break it",
+            "break that",
+            "i'll do",
+            "i will do",
+            "i can do",
+            "my plan",
         )
     )
     if has_filler_word:
@@ -255,9 +321,29 @@ def _is_filler_sentence(sentence: str) -> bool:
 def _has_technical_content(sentence: str) -> bool:
     """True if *sentence* contains code, file paths, or other technical markers."""
     # Code indicators.
-    for marker in ("```", "def ", "class ", "import ", "function ", "=>", "()", "->",
-                   ".py", ".js", ".ts", ".json", ".yaml", ".toml", ".md",
-                   "npm ", "pip ", "git ", "curl ", "docker ", "sudo "):
+    for marker in (
+        "```",
+        "def ",
+        "class ",
+        "import ",
+        "function ",
+        "=>",
+        "()",
+        "->",
+        ".py",
+        ".js",
+        ".ts",
+        ".json",
+        ".yaml",
+        ".toml",
+        ".md",
+        "npm ",
+        "pip ",
+        "git ",
+        "curl ",
+        "docker ",
+        "sudo ",
+    ):
         if marker in sentence:
             return True
     # Starts with a content word (actual task beginning).

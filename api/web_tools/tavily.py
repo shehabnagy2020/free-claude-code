@@ -17,7 +17,9 @@ _EXTRACT_URL = "https://api.tavily.com/extract"
 # Eliminates ~300ms handshake overhead per request (significant on Pi 4).
 _http_client = httpx.AsyncClient(
     timeout=_REQUEST_TIMEOUT_S,
-    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0),
+    limits=httpx.Limits(
+        max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0
+    ),
 )
 
 
@@ -43,7 +45,9 @@ async def tavily_search(api_key: str, query: str) -> list[dict[str, str]]:
     if not results:
         logger.warning("tavily_search returned 0 results for query={!r}", query)
     else:
-        logger.info("tavily_search returned {} results for query={!r}", len(results), query)
+        logger.info(
+            "tavily_search returned {} results for query={!r}", len(results), query
+        )
     return [
         {
             "title": str(r.get("title", r.get("url", ""))),

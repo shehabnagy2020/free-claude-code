@@ -14,7 +14,10 @@ from .request import (
     is_web_server_tool_request,
     strip_server_tools,
 )
-from .streaming import stream_web_server_tool_response, stream_with_web_tool_interception
+from .streaming import (
+    stream_web_server_tool_response,
+    stream_with_web_tool_interception,
+)
 
 __all__ = [
     "WebFetchEgressPolicy",

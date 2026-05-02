@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response as StarletteResponse
 from starlette.types import Scope
 
 from config.logging_config import configure_logging
@@ -36,7 +37,7 @@ class _SPAStaticFiles(StaticFiles):
     React's client-side router can take over.
     """
 
-    async def get_response(self, path: str, scope: Scope):  # type: ignore[override]
+    async def get_response(self, path: str, scope: Scope) -> StarletteResponse:
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:

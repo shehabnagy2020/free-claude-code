@@ -74,7 +74,9 @@ class UIChatDB:
             async with db.execute("PRAGMA table_info(sessions)") as cursor:
                 columns = await cursor.fetchall()
             if not any(col[1] == "summary" for col in columns):
-                await db.execute("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL")
+                await db.execute(
+                    "ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL"
+                )
             # Create global_memory table
             await db.execute(
                 "CREATE TABLE IF NOT EXISTS global_memory ("
@@ -194,11 +196,7 @@ class UIChatDB:
         if not rows:
             return None  # session doesn't exist
         # LEFT JOIN may produce a single row with m.id = NULL (empty session)
-        return [
-            _message_to_dict(row)
-            for row in rows
-            if row["id"] is not None
-        ]
+        return [_message_to_dict(row) for row in rows if row["id"] is not None]
 
     async def get_session_title(self, session_id: str) -> str | None:
         """Return the session title, or None if not found."""
@@ -281,7 +279,9 @@ class UIChatDB:
         return [
             {
                 "role": row["role"],
-                "content": row["content"][:500] if len(row["content"]) > 500 else row["content"],
+                "content": row["content"][:500]
+                if len(row["content"]) > 500
+                else row["content"],
             }
             for row in reversed(rows)
         ]
@@ -320,9 +320,7 @@ class UIChatDB:
         normalized = self._normalize_memory_value(value)
         async with aiosqlite.connect(self._db_path) as db:
             # Check if a normalized version of this value already exists
-            async with db.execute(
-                "SELECT key, value FROM global_memory"
-            ) as cursor:
+            async with db.execute("SELECT key, value FROM global_memory") as cursor:
                 all_entries = await cursor.fetchall()
 
             for entry in all_entries:
@@ -351,6 +349,7 @@ class UIChatDB:
         - Remove trailing punctuation
         """
         import re
+
         normalized = value.lower().strip()
         normalized = re.sub(r"\s+", " ", normalized)
         normalized = normalized.rstrip(".,;:!?")
@@ -359,8 +358,6 @@ class UIChatDB:
     async def delete_global_memory(self, key: str) -> bool:
         """Delete a global memory entry. Returns True if deleted."""
         async with aiosqlite.connect(self._db_path) as db:
-            cursor = await db.execute(
-                "DELETE FROM global_memory WHERE key = ?", (key,)
-            )
+            cursor = await db.execute("DELETE FROM global_memory WHERE key = ?", (key,))
             await db.commit()
         return (cursor.rowcount or 0) > 0

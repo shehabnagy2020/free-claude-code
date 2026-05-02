@@ -33,11 +33,16 @@ class TestContextModeNudge:
 
     def test_nudge_has_tool_routing_section(self):
         """Test that nudge has tool routing guidance."""
-        assert "Tool Routing" in CONTEXT_MODE_NUDGE or "tool" in CONTEXT_MODE_NUDGE.lower()
+        assert (
+            "Tool Routing" in CONTEXT_MODE_NUDGE or "tool" in CONTEXT_MODE_NUDGE.lower()
+        )
 
     def test_nudge_has_output_style_section(self):
         """Test that nudge has output style guidance."""
-        assert "Output Style" in CONTEXT_MODE_NUDGE or "terse" in CONTEXT_MODE_NUDGE.lower()
+        assert (
+            "Output Style" in CONTEXT_MODE_NUDGE
+            or "terse" in CONTEXT_MODE_NUDGE.lower()
+        )
 
     def test_short_nudge_is_shorter(self):
         """Test that short nudge is significantly shorter than full nudge."""

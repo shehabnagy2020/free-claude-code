@@ -318,8 +318,8 @@ class OpenAIChatTransport(BaseProvider):
                                         yield event
                                     yield sse.emit_thinking_delta(part.content)
                                 else:
-                                    filtered_text, detected_tools = heuristic_parser.feed(
-                                        part.content
+                                    filtered_text, detected_tools = (
+                                        heuristic_parser.feed(part.content)
                                     )
 
                                     if filtered_text:
@@ -430,7 +430,9 @@ class OpenAIChatTransport(BaseProvider):
         # Flush any buffered chatter-held text before closing blocks.
         chatter_held = chatter_stripper.flush()
         if chatter_held:
-            logger.info("{}_CHATTER: flush at stream end, len={}", tag, len(chatter_held))
+            logger.info(
+                "{}_CHATTER: flush at stream end, len={}", tag, len(chatter_held)
+            )
             for event in sse.ensure_text_block():
                 yield event
             yield sse.emit_text_delta(chatter_held)

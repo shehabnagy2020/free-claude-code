@@ -71,7 +71,7 @@ async def generate_summary(
                 blocks = json.loads(content)
                 texts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
                 content = " ".join(texts) if texts else "[image]"
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 pass
         if len(content) > 500:
             content = content[:500] + "…"
@@ -108,7 +108,9 @@ async def generate_summary(
 
     try:
         resp = service.create_message(summary_request)
-        stream_iter: AsyncIterator[str] = resp.body_iterator  # type: ignore[union-attr]
+        stream_iter: AsyncIterator[str] | None = getattr(resp, "body_iterator", None)
+        if stream_iter is None:
+            raise RuntimeError("No body_iterator in response")
         text_parts: list[str] = []
         async for chunk in stream_iter:
             for line in chunk.splitlines():
@@ -120,7 +122,7 @@ async def generate_summary(
                         d = evt.get("delta", {})
                         if d.get("type") == "text_delta":
                             text_parts.append(d.get("text", ""))
-                except (json.JSONDecodeError, KeyError, AttributeError):
+                except json.JSONDecodeError, KeyError, AttributeError:
                     pass
 
         summary_text = "".join(text_parts).strip()
@@ -136,9 +138,7 @@ async def generate_summary(
             await _extract_remember_items(db, existing_summary)
             return existing_summary
     except Exception as exc:
-        logger.warning(
-            "UI: summary generation failed: {} {}", type(exc).__name__, exc
-        )
+        logger.warning("UI: summary generation failed: {} {}", type(exc).__name__, exc)
         # Even on failure, try to extract memory from any partial content
         partial_text = "".join(text_parts).strip()
         if partial_text:
@@ -154,6 +154,7 @@ async def _extract_remember_items(db: UIChatDB, summary_text: str) -> None:
     to avoid duplicating real-time extraction from user messages.
     """
     import re
+
     _MEMORY_TAG = re.compile(
         r"(?:REMEMBER|KEEP|NOTE|DON'?T\s+FORGET|SAVE)\s*:\s*(.+?)(?=(?:\.?\s*(?:REMEMBER|KEEP|NOTE|DON'?T\s+FORGET|SAVE)\s*:)|\.?$)",
         re.IGNORECASE,

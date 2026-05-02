@@ -344,8 +344,12 @@ class AnthropicMessagesTransport(BaseProvider):
                         thinking_enabled=thinking_enabled,
                     ):
                         # Apply chatter stripping to text deltas
-                        if '"type":"content_block_delta"' in chunk and '"text_delta"' in chunk:
+                        if (
+                            '"type":"content_block_delta"' in chunk
+                            and '"text_delta"' in chunk
+                        ):
                             import json as _json
+
                             try:
                                 for line in chunk.splitlines():
                                     if line.startswith("data:"):
@@ -361,7 +365,7 @@ class AnthropicMessagesTransport(BaseProvider):
                                                 elif text:
                                                     # Text was buffered by stripper, skip this chunk
                                                     continue
-                            except (_json.JSONDecodeError, KeyError):
+                            except _json.JSONDecodeError, KeyError:
                                 pass
                         sent_any_event = True
                         emitted_tracker.feed(chunk)
@@ -376,6 +380,7 @@ class AnthropicMessagesTransport(BaseProvider):
                             len(chatter_held),
                         )
                         import json as _json
+
                         flush_event = {
                             "type": "content_block_delta",
                             "index": 0,

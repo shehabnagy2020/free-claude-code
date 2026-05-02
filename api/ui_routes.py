@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from config.settings import get_settings
 
 from .dependencies import resolve_provider
-from .models.anthropic import MessagesRequest
+from .models.anthropic import Message, MessagesRequest
 from .services import ClaudeProxyService
 from .summary import generate_summary
 from .web_tools.tavily import tavily_fetch as _tavily_fetch
@@ -29,33 +29,119 @@ ui_router = APIRouter(prefix="/ui/api")
 # Keywords that indicate the user needs real-time / current information.
 # Checked against the lowercased user message to decide whether to run Tavily
 # proactively before the LLM call. Module-level so it's only built once.
-_REALTIME_KEYWORDS: frozenset[str] = frozenset({
-    # Time references
-    "today", "tonight", "now", "current", "currently", "latest", "recent",
-    "recently", "right now", "at the moment", "this week", "this month",
-    "this year", "yesterday", "tomorrow", "upcoming", "ongoing", "live",
-    # Weather
-    "weather", "forecast", "temperature", "humidity", "rain", "snow",
-    "wind", "storm", "hurricane", "climate",
-    # News & events
-    "news", "breaking", "happened", "update", "updates", "announced",
-    "announcement", "launched", "released", "release", "event",
-    "election", "vote", "voted", "poll", "war", "conflict", "attack",
-    "protest", "crisis", "earthquake", "flood",
-    # Finance & markets
-    "price", "prices", "stock", "stocks", "market", "markets", "index",
-    "rate", "rates", "inflation", "ipo", "earnings", "crypto", "bitcoin",
-    "ethereum", "coin", "trading", "usd", "eur", "gbp",
-    # Sports
-    "score", "scores", "match", "game", "result", "results", "standings",
-    "fixture", "league", "tournament", "championship", "cup", "goal",
-    "player", "team", "transfer",
-    # Tech & AI
-    "trending", "viral", "ai model", "gpt", "gemini", "llm",
-    # Search intent
-    "search", "find", "look up", "look up", "who is", "what is",
-    "where is", "when did", "how much", "how many",
-})
+_REALTIME_KEYWORDS: frozenset[str] = frozenset(
+    {
+        # Time references
+        "today",
+        "tonight",
+        "now",
+        "current",
+        "currently",
+        "latest",
+        "recent",
+        "recently",
+        "right now",
+        "at the moment",
+        "this week",
+        "this month",
+        "this year",
+        "yesterday",
+        "tomorrow",
+        "upcoming",
+        "ongoing",
+        "live",
+        # Weather
+        "weather",
+        "forecast",
+        "temperature",
+        "humidity",
+        "rain",
+        "snow",
+        "wind",
+        "storm",
+        "hurricane",
+        "climate",
+        # News & events
+        "news",
+        "breaking",
+        "happened",
+        "update",
+        "updates",
+        "announced",
+        "announcement",
+        "launched",
+        "released",
+        "release",
+        "event",
+        "election",
+        "vote",
+        "voted",
+        "poll",
+        "war",
+        "conflict",
+        "attack",
+        "protest",
+        "crisis",
+        "earthquake",
+        "flood",
+        # Finance & markets
+        "price",
+        "prices",
+        "stock",
+        "stocks",
+        "market",
+        "markets",
+        "index",
+        "rate",
+        "rates",
+        "inflation",
+        "ipo",
+        "earnings",
+        "crypto",
+        "bitcoin",
+        "ethereum",
+        "coin",
+        "trading",
+        "usd",
+        "eur",
+        "gbp",
+        # Sports
+        "score",
+        "scores",
+        "match",
+        "game",
+        "result",
+        "results",
+        "standings",
+        "fixture",
+        "league",
+        "tournament",
+        "championship",
+        "cup",
+        "goal",
+        "player",
+        "team",
+        "transfer",
+        # Tech & AI
+        "trending",
+        "viral",
+        "ai model",
+        "gpt",
+        "gemini",
+        "llm",
+        # Search intent
+        "search",
+        "find",
+        "look up",
+        "look up",
+        "who is",
+        "what is",
+        "where is",
+        "when did",
+        "how much",
+        "how many",
+    }
+)
 
 
 # Regex patterns for real-time memory extraction from user messages.
@@ -64,7 +150,9 @@ import re as _re
 
 _MEMORY_PATTERNS: list[_re.Pattern[str]] = [
     # "X, remember that" or "X, remember" — fact comes BEFORE the keyword
-    _re.compile(r"(.+?),\s*(?:please\s+)?remember\s+(?:that\s*)?(?:\.|$)", _re.IGNORECASE),
+    _re.compile(
+        r"(.+?),\s*(?:please\s+)?remember\s+(?:that\s*)?(?:\.|$)", _re.IGNORECASE
+    ),
     # "remember that X", "remember X" — fact comes AFTER the keyword
     _re.compile(r"(?:please\s+)?remember\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
     # "keep X in mind"
@@ -88,25 +176,59 @@ _MEMORY_PATTERNS: list[_re.Pattern[str]] = [
     # "write this down: X"
     _re.compile(r"write\s+(?:this\s+)?down\s*:?\s*(.+?)(?:\.|$)", _re.IGNORECASE),
     # "make sure you remember X", "make sure to remember X"
-    _re.compile(r"make\s+sure\s+(?:you\s+|to\s+)?remember\s+(.+?)(?:\.|$)", _re.IGNORECASE),
+    _re.compile(
+        r"make\s+sure\s+(?:you\s+|to\s+)?remember\s+(.+?)(?:\.|$)", _re.IGNORECASE
+    ),
     # "I want you to remember X", "I need you to remember X"
-    _re.compile(r"(?:I\s+)?(?:want|need)\s+you\s+to\s+remember\s+(.+?)(?:\.|$)", _re.IGNORECASE),
+    _re.compile(
+        r"(?:I\s+)?(?:want|need)\s+you\s+to\s+remember\s+(.+?)(?:\.|$)", _re.IGNORECASE
+    ),
     # "here's something to remember: X" or "here is something to remember: X"
-    _re.compile(r"here'?s?\s+something\s+to\s+remember\s*:?\s*(.+?)(?:\.|$)", _re.IGNORECASE),
+    _re.compile(
+        r"here'?s?\s+something\s+to\s+remember\s*:?\s*(.+?)(?:\.|$)", _re.IGNORECASE
+    ),
     # Declarative personal facts: "My name is X", "My age is Y" - capture full fact
     # Match until memory keywords, sentence end, or line end
-    _re.compile(r"(my\s+(?:name|age|email|phone|birthday|address|username|password)\s+is\s+.+?)(?:\s*,?\s*(?:keep|remember|note|save|forget|write)\b|[.!?]\s*$|$)", _re.IGNORECASE),
+    _re.compile(
+        r"(my\s+(?:name|age|email|phone|birthday|address|username|password)\s+is\s+.+?)(?:\s*,?\s*(?:keep|remember|note|save|forget|write)\b|[.!?]\s*$|$)",
+        _re.IGNORECASE,
+    ),
     _re.compile(r"(i\s+am\s+\d+(?:\s*years?\s*old)?)(?:\.|$)", _re.IGNORECASE),
 ]
 
 
 def _extract_memory_from_text(text: str) -> list[str]:
     """Extract memory items from user text using keyword patterns."""
-    _FILLER = {"that", "this", "it", "them", "those", "these", "what i said", "the above", "the following"}
-    _MEMORY_KEYWORDS = {"remember", "keep in mind", "note", "don't forget", "do not forget", "save", "write down", "make sure"}
+    _FILLER = {
+        "that",
+        "this",
+        "it",
+        "them",
+        "those",
+        "these",
+        "what i said",
+        "the above",
+        "the following",
+    }
+    _MEMORY_KEYWORDS = {
+        "remember",
+        "keep in mind",
+        "note",
+        "don't forget",
+        "do not forget",
+        "save",
+        "write down",
+        "make sure",
+    }
     _FACT_PATTERNS = [
         # Personal facts without keywords: "My name is X", "My age is Y"
-        (_re.compile(r"\bmy\s+(name|age|email|phone|birthday|address|username)\s+is\s+(.+?)(?:\.|$)", _re.IGNORECASE), 2),
+        (
+            _re.compile(
+                r"\bmy\s+(name|age|email|phone|birthday|address|username)\s+is\s+(.+?)(?:\.|$)",
+                _re.IGNORECASE,
+            ),
+            2,
+        ),
     ]
     items: list[str] = []
     for pattern in _MEMORY_PATTERNS:
@@ -132,17 +254,25 @@ def _extract_memory_from_text(text: str) -> list[str]:
         for kw in _MEMORY_KEYWORDS:
             if kw in text_lower:
                 # Find the sentence containing the keyword
-                for sentence in _re.split(r'[.!?]+', text):
+                for sentence in _re.split(r"[.!?]+", text):
                     sentence = sentence.strip()
                     if kw in sentence.lower() and len(sentence) > 5:
                         # Remove the keyword itself to get the fact
-                        cleaned = _re.sub(
-                            r'(?:please\s+)?(?:remember|keep in mind|note|don\'t forget|do not forget|save|write down|make sure)\s*(?:that\s+)?',
-                            '',
-                            sentence,
-                            flags=_re.IGNORECASE
-                        ).strip().rstrip(".,;:!?")
-                        if cleaned and cleaned.lower() not in _FILLER and len(cleaned) > 3:
+                        cleaned = (
+                            _re.sub(
+                                r"(?:please\s+)?(?:remember|keep in mind|note|don\'t forget|do not forget|save|write down|make sure)\s*(?:that\s+)?",
+                                "",
+                                sentence,
+                                flags=_re.IGNORECASE,
+                            )
+                            .strip()
+                            .rstrip(".,;:!?")
+                        )
+                        if (
+                            cleaned
+                            and cleaned.lower() not in _FILLER
+                            and len(cleaned) > 3
+                        ):
                             items.append(cleaned)
                         break
     # Deduplicate: if a shorter item is contained within a longer one, keep the longer.
@@ -178,7 +308,8 @@ def _verify_token_value(token: str) -> bool:
 
 
 def _get_db(request: Request) -> UIChatDB:
-    return request.app.state.ui_db  # type: ignore[attr-defined]
+    db: UIChatDB = request.app.state.ui_db
+    return db
 
 
 def _verify_token(request: Request) -> str:
@@ -247,9 +378,13 @@ async def logout(request: Request) -> dict[str, bool]:
 # The three tiers always shown in the model selector, regardless of .env.
 # The proxy's own resolve_model() maps each Claude ID to the right provider.
 _MODEL_TIERS: list[dict[str, str]] = [
-    {"label": "Claude Opus",   "claude_id": "claude-opus-4-20250514",     "tier": "opus"},
-    {"label": "Claude Sonnet", "claude_id": "claude-3-5-sonnet-20241022", "tier": "sonnet"},
-    {"label": "Claude Haiku",  "claude_id": "claude-3-haiku-20240307",    "tier": "haiku"},
+    {"label": "Claude Opus", "claude_id": "claude-opus-4-20250514", "tier": "opus"},
+    {
+        "label": "Claude Sonnet",
+        "claude_id": "claude-3-5-sonnet-20241022",
+        "tier": "sonnet",
+    },
+    {"label": "Claude Haiku", "claude_id": "claude-3-haiku-20240307", "tier": "haiku"},
 ]
 
 
@@ -302,7 +437,9 @@ async def list_sessions(_: Token, db: DB) -> list[dict[str, Any]]:
 
 
 @ui_router.post("/sessions", status_code=201)
-async def create_session(body: CreateSessionRequest, _: Token, db: DB) -> dict[str, Any]:
+async def create_session(
+    body: CreateSessionRequest, _: Token, db: DB
+) -> dict[str, Any]:
     return await db.create_session(body.title, body.model)
 
 
@@ -310,7 +447,9 @@ async def create_session(body: CreateSessionRequest, _: Token, db: DB) -> dict[s
 async def update_session(
     session_id: str, body: UpdateSessionRequest, _: Token, db: DB
 ) -> dict[str, Any]:
-    updated = await db.update_session(session_id, title=body.title, summary=body.summary)
+    updated = await db.update_session(
+        session_id, title=body.title, summary=body.summary
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return updated
@@ -350,8 +489,12 @@ async def trigger_summarize(
     if not await db.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
     settings = get_settings()
-    provider_getter = lambda pt: resolve_provider(pt, app=request.app, settings=settings)
-    summary = await generate_summary(db, session_id, settings, provider_getter, model=body.model)
+    provider_getter = lambda pt: resolve_provider(
+        pt, app=request.app, settings=settings
+    )
+    summary = await generate_summary(
+        db, session_id, settings, provider_getter, model=body.model
+    )
     return {"summary": summary}
 
 
@@ -361,7 +504,9 @@ async def _summarize_after_chat(
     """Background task: generate session summary after chat response completes."""
     try:
         settings = get_settings()
-        provider_getter = lambda pt: resolve_provider(pt, app=request.app, settings=settings)
+        provider_getter = lambda pt: resolve_provider(
+            pt, app=request.app, settings=settings
+        )
         await generate_summary(db, session_id, settings, provider_getter, model=model)
     except Exception as exc:
         logger.warning(
@@ -391,7 +536,9 @@ async def delete_memory(key: str, _: Token, db: DB) -> dict[str, bool]:
 
 
 @ui_router.post("/chat")
-async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> StreamingResponse:
+async def chat(
+    body: ChatRequest, request: Request, _: Token, db: DB
+) -> StreamingResponse:
     """
     Stream a response from the provider in-process (no HTTP loopback).
     Saves user + assistant messages to the DB around the stream.
@@ -405,14 +552,16 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     if body.images:
         user_blocks: list[dict[str, Any]] = []
         for img in body.images:
-            user_blocks.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": img.get("media_type", "image/jpeg"),
-                    "data": img["data"],
-                },
-            })
+            user_blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img.get("media_type", "image/jpeg"),
+                        "data": img["data"],
+                    },
+                }
+            )
         if body.content.strip():
             user_blocks.append({"type": "text", "text": body.content})
         user_content_for_api: list[dict[str, Any]] | str = user_blocks
@@ -432,7 +581,11 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         for _item in _memory_items:
             _key = _item[:50].rstrip(".,;:")
             await db.upsert_global_memory(_key, _item)
-        logger.info("UI: extracted {} memory items from user message: {}", len(_memory_items), _memory_items)
+        logger.info(
+            "UI: extracted {} memory items from user message: {}",
+            len(_memory_items),
+            _memory_items,
+        )
     # ---------------------------------------------------------------------------
 
     # Auto-title: set on the first user turn so the sidebar updates immediately,
@@ -448,22 +601,25 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     def _parse_content(raw: str) -> list[dict[str, Any]] | str:
         if raw.startswith("["):
             try:
-                return json.loads(raw)  # type: ignore[return-value]
+                parsed: list[dict[str, Any]] = json.loads(raw)
+                return parsed
             except json.JSONDecodeError:
                 pass
         return raw
 
-    api_messages: list[dict[str, Any]] = [
-        {"role": m["role"], "content": _parse_content(m["content"])} for m in history
+    api_messages: list[Message] = [
+        Message(role=m["role"], content=_parse_content(m["content"])) for m in history
     ]
-    api_messages.append({"role": "user", "content": user_content_for_api})
+    api_messages.append(Message(role="user", content=user_content_for_api))
 
     # Build the MessagesRequest and call the service in-process (no HTTP loopback)
     settings = get_settings()
 
     service = ClaudeProxyService(
         settings,
-        provider_getter=lambda pt: resolve_provider(pt, app=request.app, settings=settings),
+        provider_getter=lambda pt: resolve_provider(
+            pt, app=request.app, settings=settings
+        ),
     )
 
     session_id = body.session_id
@@ -473,9 +629,8 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     # Detect real-time queries and inject Tavily results into the system prompt
     # before the LLM call. No tool round-trip — works with any model.
     _user_text_lower = body.content.lower()
-    _needs_search = (
-        settings.tavily_api_key
-        and any(kw in _user_text_lower for kw in _REALTIME_KEYWORDS)
+    _needs_search = settings.tavily_api_key and any(
+        kw in _user_text_lower for kw in _REALTIME_KEYWORDS
     )
     _tavily_system: str | None = None
     if _needs_search:
@@ -488,7 +643,9 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                 _prev_parts: list[str] = []
                 for _msg in reversed(history[-4:]):
                     if _msg["role"] == "user":
-                        _prev_text = _msg["content"] if isinstance(_msg["content"], str) else ""
+                        _prev_text = (
+                            _msg["content"] if isinstance(_msg["content"], str) else ""
+                        )
                         if _prev_text.strip():
                             _prev_parts.append(_prev_text.strip())
                         break
@@ -505,7 +662,11 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                     "The following are live web search results for the user's query. "
                     f"Use them to answer accurately with up-to-date information:\n\n{_snippets}"
                 )
-                logger.info("UI proactive search: {} results query={!r}", len(_results), _tavily_query[:80])
+                logger.info(
+                    "UI proactive search: {} results query={!r}",
+                    len(_results),
+                    _tavily_query[:80],
+                )
         except Exception as _search_err:
             logger.warning("UI proactive search failed: {}", _search_err)
     # ---------------------------------------------------------------------------
@@ -523,10 +684,14 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         elif len(history) > 2:
             # No summary yet — synthesize a brief context note from first user message
             # so the model has an at-a-glance anchor for the conversation topic.
-            _first_user = next((m["content"] for m in history if m["role"] == "user"), None)
+            _first_user = next(
+                (m["content"] for m in history if m["role"] == "user"), None
+            )
             if _first_user and isinstance(_first_user, str):
                 _topic = _first_user.strip()[:100].replace("\n", " ")
-                _system_parts.append(f"## Session Context\nConversation topic: {_topic}")
+                _system_parts.append(
+                    f"## Session Context\nConversation topic: {_topic}"
+                )
     _memory_system: str | None = "\n\n".join(_system_parts) if _system_parts else None
     # ---------------------------------------------------------------------------
 
@@ -539,17 +704,21 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                 _prompt_parts.append(_memory_system)
             if _tavily_system:
                 _prompt_parts.append(_tavily_system)
-            _composed_system: str | None = "\n\n".join(_prompt_parts) if _prompt_parts else None
+            _composed_system: str | None = (
+                "\n\n".join(_prompt_parts) if _prompt_parts else None
+            )
 
             cur_request = MessagesRequest(
                 model=body.model,
-                messages=loop_messages,  # type: ignore[arg-type]
+                messages=loop_messages,
                 max_tokens=body.max_tokens,
                 stream=True,
                 system=_composed_system,
             )
             resp = service.create_message(cur_request)
-            stream_iter: AsyncIterator[str] = resp.body_iterator  # type: ignore[union-attr]
+            stream_iter: AsyncIterator[str] = getattr(resp, "body_iterator", None)
+            if stream_iter is None:
+                raise RuntimeError("No body_iterator in response")
             async for chunk in stream_iter:
                 yield chunk
                 for line in chunk.splitlines():
@@ -561,7 +730,7 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                             d = evt.get("delta", {})
                             if d.get("type") == "text_delta":
                                 text_parts.append(d.get("text", ""))
-                    except (json.JSONDecodeError, KeyError, AttributeError):
+                    except json.JSONDecodeError, KeyError, AttributeError:
                         pass
 
         except Exception as e:
