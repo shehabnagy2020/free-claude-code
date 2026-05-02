@@ -1,17 +1,73 @@
+# Python
 __pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+
+# IDE
 .claude
 .cursor
-.pytest_cache
-.ruff_cache
 .serena
-.venv
-agent_workspace
-.env
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+
+# Logs
+*.log
 server.log
 debug-*.log
-.coverage
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Cache
 llama_cache
-.smoke-results
-*.log
-**/node_modules
-**/dist
+
+# Project specific
+agent_workspace/
+.smoke-results/
+
+# Node (if applicable)
+**/node_modules/
+**/dist/
+
+# OS
+.DS_Store
+Thumbs.db
