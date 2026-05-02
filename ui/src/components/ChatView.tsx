@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import MessageBubble from "./MessageBubble";
+import SessionSummary from "./SessionSummary";
 import type { ImageAttachment, Message, ModelOption } from "../types";
 
 const ACCEPTED_IMAGE_TYPES = [
@@ -28,6 +29,7 @@ interface Props {
   error: string | null;
   hasSession: boolean;
   models: ModelOption[];
+  sessionSummary: string | null;
   onSend: (content: string, images: ImageAttachment[]) => void;
   onResend: (
     content: string,
@@ -150,6 +152,7 @@ export default function ChatView({
   error,
   hasSession,
   models,
+  sessionSummary,
   onSend,
   onResend,
   onStop,
@@ -280,6 +283,9 @@ export default function ChatView({
           </div>
         ) : (
           <>
+            {sessionSummary && !isLoading && messages.length > 0 && (
+              <SessionSummary summary={sessionSummary} />
+            )}
             {messages.map((m) => (
               <MessageBubble
                 key={m.id}

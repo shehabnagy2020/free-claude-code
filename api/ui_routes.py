@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from loguru import logger
 from pydantic import BaseModel
 
@@ -18,6 +19,7 @@ from config.settings import get_settings
 from .dependencies import resolve_provider
 from .models.anthropic import MessagesRequest
 from .services import ClaudeProxyService
+from .summary import generate_summary
 from .web_tools.tavily import tavily_fetch as _tavily_fetch
 from .web_tools.tavily import tavily_search as _tavily_search
 from .ui_db import UIChatDB
@@ -109,6 +111,7 @@ class CreateSessionRequest(BaseModel):
 
 class UpdateSessionRequest(BaseModel):
     title: str | None = None
+    summary: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -211,7 +214,7 @@ async def create_session(body: CreateSessionRequest, _: Token, db: DB) -> dict[s
 async def update_session(
     session_id: str, body: UpdateSessionRequest, _: Token, db: DB
 ) -> dict[str, Any]:
-    updated = await db.update_session(session_id, title=body.title)
+    updated = await db.update_session(session_id, title=body.title, summary=body.summary)
     if updated is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return updated
@@ -230,6 +233,46 @@ async def get_messages(session_id: str, _: Token, db: DB) -> list[dict[str, Any]
     if not await db.session_exists(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
     return await db.get_messages(session_id)
+
+
+@ui_router.get("/sessions/{session_id}/summary")
+async def get_session_summary(session_id: str, _: Token, db: DB) -> dict[str, Any]:
+    if not await db.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    summary = await db.get_summary(session_id)
+    return {"summary": summary}
+
+
+class SummarizeRequest(BaseModel):
+    model: str = "claude-opus-4-20250514"
+
+
+@ui_router.post("/sessions/{session_id}/summarize")
+async def trigger_summarize(
+    session_id: str, body: SummarizeRequest, request: Request, _: Token, db: DB
+) -> dict[str, Any]:
+    if not await db.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    settings = get_settings()
+    provider_getter = lambda pt: resolve_provider(pt, app=request.app, settings=settings)
+    summary = await generate_summary(db, session_id, settings, provider_getter, model=body.model)
+    return {"summary": summary}
+
+
+async def _summarize_after_chat(
+    session_id: str, model: str, db: UIChatDB, request: Request
+) -> None:
+    """Background task: generate session summary after chat response completes."""
+    try:
+        settings = get_settings()
+        provider_getter = lambda pt: resolve_provider(pt, app=request.app, settings=settings)
+        await generate_summary(db, session_id, settings, provider_getter, model=model)
+    except Exception as exc:
+        logger.warning(
+            "UI: background summary failed for session {}: {}",
+            session_id[:8],
+            type(exc).__name__,
+        )
 
 
 # ── Streaming chat proxy ───────────────────────────────────────────────────────
@@ -385,6 +428,11 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
                         type(save_err).__name__,
                     )
 
+    # Background task: generate/update session summary after stream completes
+    _summarize_bg = BackgroundTask(
+        _summarize_after_chat, body.session_id, body.model, db, request
+    )
+
     return StreamingResponse(
         _stream_and_save(),
         media_type="text/event-stream",
@@ -393,4 +441,5 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
+        background=_summarize_bg,
     )

@@ -172,6 +172,23 @@ export async function fetchMessages(
   return get<Message[]>(`/sessions/${sessionId}/messages`, token);
 }
 
+// ── Summary ──────────────────────────────────────────────────────────────────
+
+export async function fetchSummary(
+  token: string,
+  sessionId: string
+): Promise<string | null> {
+  try {
+    const data = await get<{ summary: string | null }>(
+      `/sessions/${sessionId}/summary`,
+      token
+    );
+    return data.summary;
+  } catch {
+    return null;
+  }
+}
+
 // ── Streaming chat ────────────────────────────────────────────────────────────
 
 export interface StreamCallbacks {

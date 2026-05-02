@@ -119,6 +119,11 @@ function SessionRow({
             </>
           )}
         </div>
+        {session.summary && (
+          <p className="text-[11px] text-surface-500 line-clamp-1 mt-0.5">
+            {session.summary.replace(/REMEMBER:/g, "📌").slice(0, 80)}
+          </p>
+        )}
       </div>
 
       {/* Action buttons – visible on hover (desktop) or when session is active (mobile) */}

@@ -24,6 +24,7 @@ export default function App() {
   const [streamingText, setStreamingText] = useState("");
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionSummary, setSessionSummary] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -74,6 +75,7 @@ export default function App() {
   useEffect(() => {
     if (!token || !activeSessionId) {
       setMessages([]);
+      setSessionSummary(null);
       return;
     }
     setLoadingMessages(true);
@@ -86,6 +88,10 @@ export default function App() {
         setMessages([]);
       })
       .finally(() => setLoadingMessages(false));
+    api
+      .fetchSummary(token, activeSessionId)
+      .then((s) => setSessionSummary(s))
+      .catch(() => setSessionSummary(null));
   }, [token, activeSessionId]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
@@ -101,6 +107,7 @@ export default function App() {
     setSessions([]);
     setMessages([]);
     setActiveSessionId(null);
+    setSessionSummary(null);
   }, [token]);
 
   const handleNewChat = useCallback(async () => {
@@ -112,6 +119,7 @@ export default function App() {
     setSessions((prev) => [session, ...prev]);
     setActiveSessionId(session.id);
     setMessages([]);
+    setSessionSummary(null);
     setSidebarOpen(false);
     setError(null);
   }, [token, selectedModel]);
@@ -134,6 +142,7 @@ export default function App() {
       if (activeSessionId === id) {
         setActiveSessionId(null);
         setMessages([]);
+        setSessionSummary(null);
       }
     },
     [token, activeSessionId]
@@ -261,6 +270,15 @@ export default function App() {
                 break;
               }
             }
+            // Poll for summary update (background summarization takes a few seconds)
+            setTimeout(async () => {
+              if (token && activeSessionId) {
+                try {
+                  const summary = await api.fetchSummary(token, activeSessionId);
+                  if (summary !== null) setSessionSummary(summary);
+                } catch { /* best-effort */ }
+              }
+            }, 5000);
           },
           onError: (msg) => {
             setIsStreaming(false);
@@ -364,6 +382,7 @@ export default function App() {
             error={error}
             hasSession={activeSessionId !== null}
             models={models}
+            sessionSummary={sessionSummary}
             onSend={handleSendMessage}
             onResend={handleResendMessage}
             onStop={handleStopStreaming}

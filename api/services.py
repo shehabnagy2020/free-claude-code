@@ -115,13 +115,13 @@ def _require_non_empty_messages(messages: list[Any]) -> None:
 
 
 def _inject_context_mode_system_prompt(request: MessagesRequest) -> MessagesRequest:
-    """Append context-mode sandbox routing rules to the system prompt.
+    """Append context-mode efficiency rules to the system prompt.
 
     No-ops if the instructions are already present (idempotent).
     """
     injection = CONTEXT_MODE_NUDGE
     system = request.system
-    needle = "CONTEXT-MODE SANDBOX"
+    needle = "CONTEXT-MODE"
 
     if isinstance(system, str) and needle in system:
         return request
@@ -255,8 +255,11 @@ class ClaudeProxyService:
             if _needs_web_injection:
                 forward_request = inject_web_search_system_prompt(forward_request)
                 logger.info("[5b] Injected web_search system prompt instruction")
-            forward_request = _inject_context_mode_system_prompt(forward_request)
-            logger.info("[5c] Injected context-mode sandbox nudge (~115 tokens)")
+            if self._settings.enable_context_mode:
+                forward_request = _inject_context_mode_system_prompt(forward_request)
+                logger.info("[5c] Injected context-mode nudge")
+            else:
+                logger.debug("[5c] Context-mode disabled, skipping nudge")
             stripped_tools = [t.name for t in (forward_request.tools or [])]
             logger.info(
                 "[5/6] FORWARD: provider={} model={} messages={} tools={}",

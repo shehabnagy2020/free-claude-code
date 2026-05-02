@@ -142,7 +142,10 @@ class AppRuntime:
         warn_if_process_auth_token(self.settings)
 
         global _ctx_mode_process
-        _ctx_mode_process = _start_context_mode_sidecar()
+        if self.settings.enable_context_mode:
+            _ctx_mode_process = _start_context_mode_sidecar()
+        else:
+            logger.info("Context-mode disabled (ENABLE_CONTEXT_MODE not set)")
 
         await self._start_messaging_if_configured()
         self._publish_state()

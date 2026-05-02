@@ -45,6 +45,7 @@ def _session_to_dict(row: aiosqlite.Row, message_count: int = 0) -> dict[str, An
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "message_count": message_count,
+        "summary": row["summary"],
     }
 
 
@@ -69,6 +70,11 @@ class UIChatDB:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             await db.executescript(_CREATE_SCHEMA)
+            # Migration: add summary column if missing
+            async with db.execute("PRAGMA table_info(sessions)") as cursor:
+                columns = await cursor.fetchall()
+            if not any(col[1] == "summary" for col in columns):
+                await db.execute("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL")
             await db.commit()
 
     # ── Sessions ──────────────────────────────────────────────────────────────
@@ -104,6 +110,7 @@ class UIChatDB:
             "created_at": now,
             "updated_at": now,
             "message_count": 0,
+            "summary": None,
         }
 
     async def update_session(
@@ -112,6 +119,7 @@ class UIChatDB:
         *,
         title: str | None = None,
         model: str | None = None,
+        summary: str | None = None,
     ) -> dict[str, Any] | None:
         parts: list[str] = []
         values: list[Any] = []
@@ -121,6 +129,9 @@ class UIChatDB:
         if model is not None:
             parts.append("model = ?")
             values.append(model)
+        if summary is not None:
+            parts.append("summary = ?")
+            values.append(summary)
         now = _now()
         parts.append("updated_at = ?")
         values.append(now)
@@ -227,3 +238,45 @@ class UIChatDB:
             "content": content,
             "created_at": now,
         }
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+
+    async def get_summary(self, session_id: str) -> str | None:
+        """Return the session summary, or None if not found."""
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT summary FROM sessions WHERE id = ?", (session_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def update_summary(self, session_id: str, summary: str) -> None:
+        """Write the session summary and bump updated_at."""
+        now = _now()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "UPDATE sessions SET summary = ?, updated_at = ? WHERE id = ?",
+                (summary, now, session_id),
+            )
+            await db.commit()
+
+    async def get_recent_messages(
+        self, session_id: str, limit: int = 6
+    ) -> list[dict[str, Any]]:
+        """Fetch the last N messages (chronological order) with truncated content."""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT role, content FROM messages WHERE session_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (session_id, limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        # Return in chronological order (oldest first)
+        return [
+            {
+                "role": row["role"],
+                "content": row["content"][:500] if len(row["content"]) > 500 else row["content"],
+            }
+            for row in reversed(rows)
+        ]

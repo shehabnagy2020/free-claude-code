@@ -193,6 +193,13 @@ class Settings(BaseSettings):
     enable_suggestion_mode_skip: bool = True
     enable_filepath_extraction_mock: bool = True
 
+    # ==================== Context-Mode Sidecar ====================
+    # When True, launch context-mode as a sidecar process and inject routing rules
+    # into the system prompt. Requires Node.js 18+ (npx). Default: False.
+    enable_context_mode: bool = Field(
+        default=False, validation_alias="ENABLE_CONTEXT_MODE"
+    )
+
     # ==================== Local web server tools (web_search / web_fetch) ====================
     # Off by default: these tools perform outbound HTTP from the proxy (SSRF risk).
     enable_web_server_tools: bool = Field(
