@@ -358,12 +358,12 @@ export default function App() {
     );
   }
 
-  if (!token) {
-    return <Login onLogin={handleLogin} onDemo={() => setDemoMode(true)} />;
-  }
-
   if (demoMode) {
     return <DemoMode onExit={() => setDemoMode(false)} />;
+  }
+
+  if (!token) {
+    return <Login onLogin={handleLogin} onDemo={() => setDemoMode(true)} />;
   }
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
