@@ -58,6 +58,53 @@ _REALTIME_KEYWORDS: frozenset[str] = frozenset({
 })
 
 
+# Regex patterns for real-time memory extraction from user messages.
+# Each pattern captures the fact the user wants remembered.
+import re as _re
+
+_MEMORY_PATTERNS: list[_re.Pattern[str]] = [
+    # "X, remember that" or "X, remember" — fact comes BEFORE the keyword
+    _re.compile(r"(.+?),\s*(?:please\s+)?remember\s+(?:that\s*)?(?:\.|$)", _re.IGNORECASE),
+    # "remember that X", "remember X" — fact comes AFTER the keyword
+    _re.compile(r"(?:please\s+)?remember\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "keep X in mind"
+    _re.compile(r"keep\s+(.+?)\s+in\s+mind(?:\.|$)", _re.IGNORECASE),
+    # "keep in mind that X"
+    _re.compile(r"keep\s+in\s+mind\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "note that X", "note X"
+    _re.compile(r"(?:please\s+)?note\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "don't forget X", "do not forget X"
+    _re.compile(r"don'?t\s+forget\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    _re.compile(r"do\s+not\s+forget\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "make sure to X", "make sure you X"
+    _re.compile(r"make\s+sure\s+(?:to\s+|you\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "save this: X", "save X"
+    _re.compile(r"save\s+(?:this\s*:?\s*)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "write this down: X"
+    _re.compile(r"write\s+(?:this\s+)?down\s*:?\s*(.+?)(?:\.|$)", _re.IGNORECASE),
+]
+
+
+def _extract_memory_from_text(text: str) -> list[str]:
+    """Extract memory items from user text using keyword patterns."""
+    _FILLER = {"that", "this", "it", "them", "those", "these"}
+    items: list[str] = []
+    for pattern in _MEMORY_PATTERNS:
+        for match in pattern.finditer(text):
+            for group in match.groups():
+                if group and group.strip():
+                    item = group.strip().rstrip(".,;:!?")
+                    if item and item.lower() not in _FILLER and item not in items:
+                        items.append(item)
+    # Deduplicate: if a shorter item is a suffix of a longer one, drop the longer.
+    # e.g. "save my phone number" vs "my phone number" → keep shorter.
+    deduped: list[str] = []
+    for item in items:
+        if not any(other != item and item.endswith(other) for other in items):
+            deduped.append(item)
+    return deduped
+
+
 # ── Stateless HMAC token ──────────────────────────────────────────────────────────
 #
 # A token is HMAC-SHA256(password, key=password + ":fcc-ui").
@@ -328,6 +375,17 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     # Save user message. Also bumps sessions.updated_at.
     await db.add_message(body.session_id, "user", user_content_for_db)
 
+    # --- Real-time memory extraction from user message -------------------------
+    # Scan for memory keywords and immediately upsert to global_memory DB
+    # so the fact is available in any new chat session right away.
+    _memory_items = _extract_memory_from_text(body.content)
+    if _memory_items:
+        for _item in _memory_items:
+            _key = _item[:50].rstrip(".,;:")
+            await db.upsert_global_memory(_key, _item)
+        logger.info("UI: extracted {} memory items from user message", len(_memory_items))
+    # ---------------------------------------------------------------------------
+
     # Auto-title: set on the first user turn so the sidebar updates immediately,
     # before the stream starts (no race with the finally block).
     user_text_for_title = body.content.strip() or "🖼️ Image"
@@ -402,24 +460,30 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         except Exception as _search_err:
             logger.warning("UI proactive search failed: {}", _search_err)
     # ---------------------------------------------------------------------------
-    # --- Global memory injection into system prompt ---------------------------
-    _memory_system: str | None = None
-    if not history:  # first turn — inject global memory so new sessions know context
-        _memory_text = await db.get_global_memory_text()
-        if _memory_text:
-            _memory_system = _memory_text
+    # --- System prompt: always inject global memory, combine with summary on follow-ups ---
+    _system_parts: list[str] = []
+    # Global memory is always injected so facts persist across all sessions.
+    _global_memory_text = await db.get_global_memory_text()
+    if _global_memory_text:
+        _system_parts.append(_global_memory_text)
+    # On follow-up turns, also inject the session summary for conversation context.
+    if history:
+        _session_summary = await db.get_summary(body.session_id)
+        if _session_summary:
+            _system_parts.append(_session_summary)
+    _memory_system: str | None = "\n\n".join(_system_parts) if _system_parts else None
     # ---------------------------------------------------------------------------
 
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
         try:
             # Compose system prompt: global memory + Tavily results
-            _system_parts: list[str] = []
+            _prompt_parts: list[str] = []
             if _memory_system:
-                _system_parts.append(_memory_system)
+                _prompt_parts.append(_memory_system)
             if _tavily_system:
-                _system_parts.append(_tavily_system)
-            _composed_system: str | None = "\n\n".join(_system_parts) if _system_parts else None
+                _prompt_parts.append(_tavily_system)
+            _composed_system: str | None = "\n\n".join(_prompt_parts) if _prompt_parts else None
 
             cur_request = MessagesRequest(
                 model=body.model,

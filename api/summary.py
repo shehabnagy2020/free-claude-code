@@ -28,9 +28,23 @@ Rules:
 - Keep the summary under 200 words
 - Write in clear concise prose, not bullet points
 - Preserve any existing "REMEMBER:" items verbatim
-- If the user says "remember this" or "note this", add it as a "REMEMBER:" item
+- If the user says "remember this", "note this", "keep this in mind", \
+"don't forget", "save this", or "write this down", add it as a "REMEMBER:" item
 - Focus on information that would help someone resume the conversation later
 - No pleasantries or meta-commentary, only substantive content"""
+
+
+_GLOBAL_MEMORY_HEADER = "## Persistent Memory"
+
+
+def _strip_global_memory_section(text: str | None) -> str | None:
+    """Remove a previously injected global memory section from a summary."""
+    if not text:
+        return text
+    idx = text.find(_GLOBAL_MEMORY_HEADER)
+    if idx < 0:
+        return text
+    return text[:idx].rstrip()
 
 
 async def generate_summary(
@@ -48,6 +62,9 @@ async def generate_summary(
     Returns the new summary text, or None if summarization is skipped/fails.
     """
     existing_summary = await db.get_summary(session_id)
+    # Strip previous global memory section before sending to the LLM
+    # so it doesn't compound across summary updates.
+    llm_existing = _strip_global_memory_section(existing_summary)
     recent = await db.get_recent_messages(session_id, limit=6)
 
     # Don't summarize if there are no assistant messages yet
@@ -73,9 +90,9 @@ async def generate_summary(
 
     messages_text = "\n\n".join(formatted)
 
-    if existing_summary:
+    if llm_existing:
         user_content = (
-            f"Current summary:\n{existing_summary}\n\n"
+            f"Current summary:\n{llm_existing}\n\n"
             f"The conversation has continued. Update the summary based on the recent messages below.\n\n"
             f"Recent messages:\n{messages_text}\n\n"
             f"Produce an updated summary."
@@ -119,8 +136,12 @@ async def generate_summary(
 
         summary_text = "".join(text_parts).strip()
         if summary_text:
-            await db.update_summary(session_id, summary_text)
             await _extract_remember_items(db, summary_text)
+            # Prepend current global memory so it stays in the session summary
+            _memory_text = await db.get_global_memory_text()
+            if _memory_text:
+                summary_text = f"{_memory_text}\n\n{summary_text}"
+            await db.update_summary(session_id, summary_text)
             return summary_text
     except Exception as exc:
         logger.warning(
@@ -131,9 +152,16 @@ async def generate_summary(
 
 
 async def _extract_remember_items(db: UIChatDB, summary_text: str) -> None:
-    """Parse REMEMBER: items from a summary and upsert them into global memory."""
+    """Parse memory items from a summary and upsert them into global memory.
+
+    Detects keywords: REMEMBER:, KEEP:, NOTE:, DON'T FORGET:, SAVE:
+    """
     import re
-    for match in re.finditer(r"REMEMBER:\s*(.+?)(?=\.?\s*REMEMBER:|\.?$)", summary_text):
+    _MEMORY_TAG = re.compile(
+        r"(?:REMEMBER|KEEP|NOTE|DON'?T\s+FORGET|SAVE)\s*:\s*(.+?)(?=(?:\.?\s*(?:REMEMBER|KEEP|NOTE|DON'?T\s+FORGET|SAVE)\s*:)|\.?$)",
+        re.IGNORECASE,
+    )
+    for match in _MEMORY_TAG.finditer(summary_text):
         item = match.group(1).strip().rstrip(".,;:")
         if not item:
             continue
