@@ -34,19 +34,6 @@ Rules:
 - No pleasantries or meta-commentary, only substantive content"""
 
 
-_GLOBAL_MEMORY_HEADER = "## Persistent Memory"
-
-
-def _strip_global_memory_section(text: str | None) -> str | None:
-    """Remove a previously injected global memory section from a summary."""
-    if not text:
-        return text
-    idx = text.find(_GLOBAL_MEMORY_HEADER)
-    if idx < 0:
-        return text
-    return text[:idx].rstrip()
-
-
 async def generate_summary(
     db: UIChatDB,
     session_id: str,
@@ -66,9 +53,7 @@ async def generate_summary(
         model = settings.model
 
     existing_summary = await db.get_summary(session_id)
-    # Strip previous global memory section before sending to the LLM
-    # so it doesn't compound across summary updates.
-    llm_existing = _strip_global_memory_section(existing_summary)
+    llm_existing = existing_summary
     recent = await db.get_recent_messages(session_id, limit=6)
 
     # Don't summarize if there are no assistant messages yet
@@ -141,10 +126,8 @@ async def generate_summary(
         summary_text = "".join(text_parts).strip()
         if summary_text:
             await _extract_remember_items(db, summary_text)
-            # Prepend current global memory so it stays in the session summary
-            _memory_text = await db.get_global_memory_text()
-            if _memory_text:
-                summary_text = f"{_memory_text}\n\n{summary_text}"
+            # Don't embed global memory in the summary — it's injected fresh
+            # from the DB on every request, so it's always up to date.
             await db.update_summary(session_id, summary_text)
             return summary_text
     except Exception as exc:
