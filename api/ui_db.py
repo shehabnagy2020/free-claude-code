@@ -310,15 +310,51 @@ class UIChatDB:
         return "## Persistent Memory\n" + "\n".join(lines)
 
     async def upsert_global_memory(self, key: str, value: str) -> None:
-        """Insert or update a global memory entry."""
+        """Insert or update a global memory entry.
+
+        Ensures uniqueness by:
+        1. Key collision: updates existing entry if key already exists
+        2. Value collision: if same normalized value exists, removes old entry
+        """
         now = _now()
+        normalized = self._normalize_memory_value(value)
         async with aiosqlite.connect(self._db_path) as db:
+            # Check if a normalized version of this value already exists
+            async with db.execute(
+                "SELECT key, value FROM global_memory"
+            ) as cursor:
+                all_entries = await cursor.fetchall()
+
+            for entry in all_entries:
+                if self._normalize_memory_value(entry[1]) == normalized:
+                    # Duplicate found - remove old entry
+                    await db.execute(
+                        "DELETE FROM global_memory WHERE key = ?", (entry[0],)
+                    )
+                    break
+
+            # Insert/update with the new key
             await db.execute(
                 "INSERT INTO global_memory (key, value, updated_at) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
                 (key, value, now, value, now),
             )
             await db.commit()
+
+    @staticmethod
+    def _normalize_memory_value(value: str) -> str:
+        """Normalize a value for duplicate detection.
+
+        - Lowercase
+        - Collapse whitespace
+        - Strip leading/trailing whitespace
+        - Remove trailing punctuation
+        """
+        import re
+        normalized = value.lower().strip()
+        normalized = re.sub(r"\s+", " ", normalized)
+        normalized = normalized.rstrip(".,;:!?")
+        return normalized
 
     async def delete_global_memory(self, key: str) -> bool:
         """Delete a global memory entry. Returns True if deleted."""

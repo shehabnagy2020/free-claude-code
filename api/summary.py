@@ -124,16 +124,25 @@ async def generate_summary(
                     pass
 
         summary_text = "".join(text_parts).strip()
+        # Always attempt memory extraction: from new summary text if available,
+        # otherwise from the existing summary (in case the stream failed).
         if summary_text:
             await _extract_remember_items(db, summary_text)
-            # Don't embed global memory in the summary — it's injected fresh
-            # from the DB on every request, so it's always up to date.
             await db.update_summary(session_id, summary_text)
             return summary_text
+        elif existing_summary:
+            # Stream returned empty but we have an existing summary — re-extract
+            # memory from it in case the LLM added new REMEMBER: items previously.
+            await _extract_remember_items(db, existing_summary)
+            return existing_summary
     except Exception as exc:
         logger.warning(
             "UI: summary generation failed: {} {}", type(exc).__name__, exc
         )
+        # Even on failure, try to extract memory from any partial content
+        partial_text = "".join(text_parts).strip()
+        if partial_text:
+            await _extract_remember_items(db, partial_text)
 
     return existing_summary
 
@@ -141,7 +150,8 @@ async def generate_summary(
 async def _extract_remember_items(db: UIChatDB, summary_text: str) -> None:
     """Parse memory items from a summary and upsert them into global memory.
 
-    Detects keywords: REMEMBER:, KEEP:, NOTE:, DON'T FORGET:, SAVE:
+    Only extracts explicitly tagged items (REMEMBER:, KEEP:, NOTE:, etc.)
+    to avoid duplicating real-time extraction from user messages.
     """
     import re
     _MEMORY_TAG = re.compile(

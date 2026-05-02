@@ -71,6 +71,9 @@ _MEMORY_PATTERNS: list[_re.Pattern[str]] = [
     _re.compile(r"keep\s+(.+?)\s+in\s+mind(?:\.|$)", _re.IGNORECASE),
     # "keep in mind that X"
     _re.compile(r"keep\s+in\s+mind\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "keep that", "keep this" (informal)
+    _re.compile(r"(.+?),\s*keep\s+(?:that|this)(?:\.|$)", _re.IGNORECASE),
+    _re.compile(r"keep\s+(?:that|this)\s*:?\s*(.+?)(?:\.|$)", _re.IGNORECASE),
     # "X, note that" — fact comes BEFORE the keyword
     _re.compile(r"(.+?),\s*(?:please\s+)?note\s+(?:that\s*)?(?:\.|$)", _re.IGNORECASE),
     # "note that X", "note X" — fact comes AFTER the keyword
@@ -78,18 +81,33 @@ _MEMORY_PATTERNS: list[_re.Pattern[str]] = [
     # "don't forget X", "do not forget X"
     _re.compile(r"don'?t\s+forget\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
     _re.compile(r"do\s+not\s+forget\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
-    # "make sure to X", "make sure you X"
+    # "make sure to X", "make sure you X", "make sure X"
     _re.compile(r"make\s+sure\s+(?:to\s+|you\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
     # "save this: X", "save X"
     _re.compile(r"save\s+(?:this\s*:?\s*)?(.+?)(?:\.|$)", _re.IGNORECASE),
     # "write this down: X"
     _re.compile(r"write\s+(?:this\s+)?down\s*:?\s*(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "make sure you remember X", "make sure to remember X"
+    _re.compile(r"make\s+sure\s+(?:you\s+|to\s+)?remember\s+(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "I want you to remember X", "I need you to remember X"
+    _re.compile(r"(?:I\s+)?(?:want|need)\s+you\s+to\s+remember\s+(.+?)(?:\.|$)", _re.IGNORECASE),
+    # "here's something to remember: X" or "here is something to remember: X"
+    _re.compile(r"here'?s?\s+something\s+to\s+remember\s*:?\s*(.+?)(?:\.|$)", _re.IGNORECASE),
+    # Declarative personal facts: "My name is X", "My age is Y" - capture full fact
+    # Match until memory keywords, sentence end, or line end
+    _re.compile(r"(my\s+(?:name|age|email|phone|birthday|address|username|password)\s+is\s+.+?)(?:\s*,?\s*(?:keep|remember|note|save|forget|write)\b|[.!?]\s*$|$)", _re.IGNORECASE),
+    _re.compile(r"(i\s+am\s+\d+(?:\s*years?\s*old)?)(?:\.|$)", _re.IGNORECASE),
 ]
 
 
 def _extract_memory_from_text(text: str) -> list[str]:
     """Extract memory items from user text using keyword patterns."""
-    _FILLER = {"that", "this", "it", "them", "those", "these"}
+    _FILLER = {"that", "this", "it", "them", "those", "these", "what i said", "the above", "the following"}
+    _MEMORY_KEYWORDS = {"remember", "keep in mind", "note", "don't forget", "do not forget", "save", "write down", "make sure"}
+    _FACT_PATTERNS = [
+        # Personal facts without keywords: "My name is X", "My age is Y"
+        (_re.compile(r"\bmy\s+(name|age|email|phone|birthday|address|username)\s+is\s+(.+?)(?:\.|$)", _re.IGNORECASE), 2),
+    ]
     items: list[str] = []
     for pattern in _MEMORY_PATTERNS:
         for match in pattern.finditer(text):
@@ -98,11 +116,40 @@ def _extract_memory_from_text(text: str) -> list[str]:
                     item = group.strip().rstrip(".,;:!?")
                     if item and item.lower() not in _FILLER and item not in items:
                         items.append(item)
-    # Deduplicate: if a shorter item is a suffix of a longer one, drop the longer.
-    # e.g. "save my phone number" vs "my phone number" → keep shorter.
+    # Also extract declarative personal facts
+    for pattern, group_idx in _FACT_PATTERNS:
+        for match in pattern.finditer(text):
+            try:
+                item = match.group(group_idx).strip().rstrip(".,;:!?")
+                if item and item.lower() not in _FILLER and item not in items:
+                    items.append(item)
+            except IndexError:
+                pass
+    # Fallback: if no patterns matched but text contains memory keywords,
+    # extract the clause/sentence containing the keyword.
+    if not items:
+        text_lower = text.lower()
+        for kw in _MEMORY_KEYWORDS:
+            if kw in text_lower:
+                # Find the sentence containing the keyword
+                for sentence in _re.split(r'[.!?]+', text):
+                    sentence = sentence.strip()
+                    if kw in sentence.lower() and len(sentence) > 5:
+                        # Remove the keyword itself to get the fact
+                        cleaned = _re.sub(
+                            r'(?:please\s+)?(?:remember|keep in mind|note|don\'t forget|do not forget|save|write down|make sure)\s*(?:that\s+)?',
+                            '',
+                            sentence,
+                            flags=_re.IGNORECASE
+                        ).strip().rstrip(".,;:!?")
+                        if cleaned and cleaned.lower() not in _FILLER and len(cleaned) > 3:
+                            items.append(cleaned)
+                        break
+    # Deduplicate: if a shorter item is contained within a longer one, keep the longer.
+    # e.g. "remember my email" vs "my email" → keep "remember my email" for more context.
     deduped: list[str] = []
     for item in items:
-        if not any(other != item and item.endswith(other) for other in items):
+        if not any(other != item and item in other for other in items):
             deduped.append(item)
     return deduped
 

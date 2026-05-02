@@ -1,0 +1,21 @@
+{
+  "name": "Claude Code",
+  "short_name": "Claude Code",
+  "description": "Claude Code AI Assistant",
+  "start_url": "/ui/",
+  "scope": "/ui/",
+  "display": "standalone",
+  "background_color": "#0d0f14",
+  "theme_color": "#0d0f14",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/ui/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "prefer_related_applications": false
+}

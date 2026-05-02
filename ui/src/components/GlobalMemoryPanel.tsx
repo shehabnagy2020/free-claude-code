@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState } from "react";
 import { Brain, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import type { MemoryEntry } from "../types";
 
