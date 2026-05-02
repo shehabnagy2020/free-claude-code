@@ -53,7 +53,16 @@ uv self update
 uv python install 3.14
 ```
 
-### 2. Clone And Configure
+### 2. Install context-mode (optional, for sandbox tools)
+   
+   Requires Node.js 18+. The proxy launches a context-mode sidecar for sandboxed execution,
+   FTS5 knowledge base search, and session continuity.
+
+   ```bash
+   npm install
+   ```
+
+### 3. Clone And Configure
 
 ```bash
 git clone https://github.com/Alishahryar1/free-claude-code.git
@@ -77,7 +86,7 @@ ANTHROPIC_AUTH_TOKEN="freecc"
 
 Use any local secret for `ANTHROPIC_AUTH_TOKEN`; Claude Code will send the same value back to this proxy. Leave it empty only for local/private testing.
 
-### 3. Start The Proxy
+### 4. Start The Proxy
 
 ```bash
 uv run uvicorn server:app --host 0.0.0.0 --port 8082

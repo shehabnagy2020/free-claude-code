@@ -1,0 +1,8 @@
+{
+  "name": "free-claude-code-node-deps",
+  "private": true,
+  "description": "Node.js dependencies for free-claude-code (context-mode MCP sidecar)",
+  "dependencies": {
+    "context-mode": "^1.0.0"
+  }
+}
