@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Literal
 
@@ -15,6 +16,7 @@ from config.constants import (
 )
 from core.anthropic import iter_provider_stream_error_sse_events
 from core.anthropic.emitted_sse_tracker import EmittedNativeSseTracker
+from core.chatter import ChatterStripper
 from core.anthropic.native_messages_request import (
     build_base_native_anthropic_request_body,
 )
@@ -336,11 +338,110 @@ class AnthropicMessagesTransport(BaseProvider):
                         _validated_stream_send
                     )
 
+                    chatter_stripper = ChatterStripper()
+                    _chatter_text_index: int | None = None
+                    _chatter_buffered_text = ""
+                    _chatter_flushed = False
+
                     async for chunk in self._iter_stream_chunks(
                         response,
                         state=state,
                         thinking_enabled=thinking_enabled,
                     ):
+                        # After the first text block is processed, pass everything through.
+                        if _chatter_flushed:
+                            sent_any_event = True
+                            emitted_tracker.feed(chunk)
+                            yield chunk
+                            continue
+
+                        # Detect text content block start.
+                        if '"content_block_start"' in chunk and '"type":"text"' in chunk:
+                            try:
+                                for line in chunk.splitlines():
+                                    if line.startswith("data:"):
+                                        evt = json.loads(line[5:].strip())
+                                        if evt.get("type") == "content_block_start":
+                                            _chatter_text_index = evt.get("index")
+                                            break
+                            except (json.JSONDecodeError, KeyError):
+                                pass
+                            logger.debug("{}_CHATTER: text block start, index={}", tag, _chatter_text_index)
+                            sent_any_event = True
+                            emitted_tracker.feed(chunk)
+                            yield chunk
+                            continue
+
+                        # Buffer text_delta events for chatter stripping.
+                        if '"text_delta"' in chunk and '"content_block_delta"' in chunk:
+                            _delta_text = ""
+                            try:
+                                for line in chunk.splitlines():
+                                    if line.startswith("data:"):
+                                        evt = json.loads(line[5:].strip())
+                                        delta = evt.get("delta", {})
+                                        if delta.get("type") == "text_delta":
+                                            raw = delta.get("text", "")
+                                            _delta_text = raw
+                                            _chatter_buffered_text += raw
+                                            _ = chatter_stripper.feed(raw)
+                            except (json.JSONDecodeError, KeyError):
+                                pass
+                            logger.debug("{}_CHATTER: buffered text_delta len={} total_buffered={}", tag, len(_delta_text), len(_chatter_buffered_text))
+                            # Swallow — we'll re-emit cleaned text on flush.
+                            continue
+
+                        # On content_block_stop or message_stop, flush the stripper.
+                        _is_block_stop = '"content_block_stop"' in chunk
+                        _is_msg_stop = '"message_stop"' in chunk
+                        if _is_block_stop or _is_msg_stop:
+                            if _chatter_buffered_text:
+                                held = chatter_stripper.flush()
+                                _stripped = len(_chatter_buffered_text) - len(held)
+                                logger.info("{}_CHATTER: flush on block_stop, original={} stripped={} remaining={}", tag, len(_chatter_buffered_text), _stripped, len(held))
+                                if held != _chatter_buffered_text and held:
+                                    # Emit cleaned text as a single delta.
+                                    cleaned = json.dumps({
+                                        "type": "content_block_delta",
+                                        "index": _chatter_text_index or 0,
+                                        "delta": {"type": "text_delta", "text": held},
+                                    })
+                                    cleaned_chunk = f"data: {cleaned}\n\n"
+                                    sent_any_event = True
+                                    emitted_tracker.feed(cleaned_chunk)
+                                    yield cleaned_chunk
+                                elif held == _chatter_buffered_text and held:
+                                    # No stripping — re-emit buffered text.
+                                    raw_evt = json.dumps({
+                                        "type": "content_block_delta",
+                                        "index": _chatter_text_index or 0,
+                                        "delta": {"type": "text_delta", "text": held},
+                                    })
+                                    raw_chunk = f"data: {raw_evt}\n\n"
+                                    sent_any_event = True
+                                    emitted_tracker.feed(raw_chunk)
+                                    yield raw_chunk
+                                _chatter_buffered_text = ""
+                                _chatter_flushed = True
+                            sent_any_event = True
+                            emitted_tracker.feed(chunk)
+                            yield chunk
+                            continue
+
+                        # Non-text events while buffering — flush first.
+                        if _chatter_buffered_text:
+                            held = chatter_stripper.flush()
+                            logger.info("{}_CHATTER: flush on non-text event, original={} remaining={}", tag, len(_chatter_buffered_text), len(held))
+                            if held:
+                                raw_evt = json.dumps({
+                                    "type": "content_block_delta",
+                                    "index": _chatter_text_index or 0,
+                                    "delta": {"type": "text_delta", "text": held},
+                                })
+                                yield f"data: {raw_evt}\n\n"
+                            _chatter_buffered_text = ""
+                            _chatter_flushed = True
+
                         sent_any_event = True
                         emitted_tracker.feed(chunk)
                         yield chunk
