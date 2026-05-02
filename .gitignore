@@ -68,6 +68,12 @@ agent_workspace/
 **/node_modules/
 **/dist/
 
+# Database
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
 # OS
 .DS_Store
 Thumbs.db
