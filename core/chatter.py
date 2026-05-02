@@ -267,27 +267,47 @@ def _has_technical_content(sentence: str) -> bool:
     return False
 
 
+# Rate-limited logging to prevent spam on verbose models
+_chatter_log_count = 0
+_chatter_log_suppressed = 0
+
+
 def _log_chatter_stripped(original: str, remaining: str) -> None:
-    """Log when chatter is stripped from a response."""
+    """Log when chatter is stripped from a response (rate-limited)."""
     from loguru import logger
+
+    global _chatter_log_count, _chatter_log_suppressed
 
     stripped_len = len(original) - len(remaining)
     if stripped_len <= 0:
         return
-    preview = original[:80].replace("\n", " ")
-    if remaining:
-        logger.info(
-            "CHATTER_STRIP: removed {} chars from '{}...' → '{}...'",
-            stripped_len,
-            preview,
-            remaining[:40].replace("\n", " "),
-        )
+
+    _chatter_log_count += 1
+    # Log first 5 strips per session, then 1 in 10, rest suppressed
+    if _chatter_log_count <= 5 or _chatter_log_count % 10 == 0:
+        preview = original[:80].replace("\n", " ")
+        if remaining:
+            logger.info(
+                "CHATTER_STRIP #{}: removed {} chars from '{}...' → '{}...'",
+                _chatter_log_count,
+                stripped_len,
+                preview,
+                remaining[:40].replace("\n", " "),
+            )
+        else:
+            logger.info(
+                "CHATTER_STRIP #{}: removed entire opening ({} chars): '{}...'",
+                _chatter_log_count,
+                stripped_len,
+                preview,
+            )
     else:
-        logger.info(
-            "CHATTER_STRIP: removed entire opening ({} chars): '{}...'",
-            stripped_len,
-            preview,
-        )
+        _chatter_log_suppressed += 1
+        if _chatter_log_suppressed % 20 == 0:
+            logger.debug(
+                "CHATTER_STRIP: {} strips suppressed since last log",
+                _chatter_log_suppressed,
+            )
 
 
 def _is_secondary_filler(sentence: str) -> bool:

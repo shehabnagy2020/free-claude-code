@@ -104,13 +104,14 @@
 
 ## CONTEXT-MODE INTEGRATION
 
-- **Sidecar process**: `api/runtime.py` launches `npx -y context-mode` as a subprocess on `AppRuntime.startup()`, kills on `shutdown()` + `atexit` safety net. Log: `Context-mode sidecar started (pid=...)`.
-- **System prompt nudge**: `core/nudge.py` contains a ~115-token sandbox routing nudge. Injected into every request's system prompt via `_inject_context_mode_system_prompt()` in `api/services.py` (follows the `inject_web_search_system_prompt` pattern). Idempotent (skips if `"CONTEXT-MODE SANDBOX"` already present). Log: `[5c] Injected context-mode sandbox nudge (~115 tokens)`.
+- **Sidecar process**: `api/runtime.py` launches `npx -y context-mode` as a subprocess on `AppRuntime.startup()` when `enable_context_mode=True`. Kills on `shutdown()` + `atexit` safety net. Log: `Context-mode sidecar started (pid=...)`.
+- **System prompt nudge**: `core/nudge.py` contains a ~115-token sandbox routing nudge. **NOT injected server-side** — client handles this via CLAUDE.md on the deployment machine.
 - **Output chatter stripping**: `core/chatter.py` provides `ChatterStripper` — a sentence-based filter that strips local-model filler prefixes ("Certainly! I can help with that.", "Of course! Let me assist...", etc.) from the first text block of responses. Applied inside `providers/openai_compat.py` (OpenAI Chat transport) only. The Anthropic Messages transport does not use chatter stripping — those providers tend to produce cleaner output. Colon-aware splitting preserves content after colons. Log: `CHATTER_STRIP: removed N chars from '...' → '...'`.
-- **Chatter is per-transport**: Chatter stripping lives in the OpenAI-compat transport, not at the services layer.
+- **Chatter is per-transport**: Chatter stripping lives in the OpenAI-compat transport (`openai_compat.py`), not at the services layer.
 - **package.json**: Root-level `package.json` declares `context-mode` as an npm dependency. Run `npm install` before starting the proxy.
-- **Nudge + Tavily coexistence**: The web search system prompt instruction (`[5b]`) and context-mode nudge (`[5c]`) are both appended to the system prompt. The nudge clarifies that the proxy's `web_search`/`web_fetch` tools (Tavily-handled) are fine to use — only raw `WebFetch` (which dumps HTML into context) is blocked.
-- **Pipeline order**: REQUEST → ROUTED → WEB_TOOLS → OPTIMIZATION → STRIP_SERVER_TOOLS → INJECT_WEB_SEARCH → INJECT_CONTEXT_MODE_NUDGE → FORWARD → STREAM (with chatter stripping).
+- **ENABLE_CONTEXT_MODE setting**: `config/settings.py` has `enable_context_mode` (default: `False`) to gate sidecar launch. Add `ENABLE_CONTEXT_MODE=true` to `.env` to enable.
+- **Nudge + Tavily coexistence**: When client-side nudge is configured, it clarifies that the proxy's `web_search`/`web_fetch` tools (Tavily-handled) are fine to use — only raw `WebFetch` (which dumps HTML into context) is blocked.
+- **Pipeline order**: REQUEST → ROUTED → WEB_TOOLS → OPTIMIZATION → STRIP_SERVER_TOOLS → INJECT_WEB_SEARCH → FORWARD → STREAM (chatter stripping applied in OpenAI transport only).
 
 ## IMAGE SUPPORT
 

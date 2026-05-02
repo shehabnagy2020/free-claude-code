@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import os
+import subprocess
+import signal
+import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +72,9 @@ class AppRuntime:
     app: FastAPI
     settings: Settings
     _provider_registry: ProviderRegistry | None = field(default=None, init=False)
+    _context_mode_process: subprocess.Popen | None = field(default=None, init=False)
+    _context_mode_health_timer: asyncio.TimerHandle | None = field(default=None, init=False)
+    _context_mode_restart_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     messaging_platform: MessagingPlatform | None = None
     message_handler: ClaudeMessageHandler | None = None
     cli_manager: CLISessionManager | None = None
@@ -86,6 +93,7 @@ class AppRuntime:
         self.app.state.provider_registry = self._provider_registry
         warn_if_process_auth_token(self.settings)
 
+        await self._start_context_mode_sidecar()
         await self._start_messaging_if_configured()
         self._publish_state()
 
@@ -124,7 +132,132 @@ class AppRuntime:
             )
 
         await self._shutdown_limiter()
+        await self._stop_context_mode_sidecar()
         logger.info("Server shut down cleanly")
+
+    async def _start_context_mode_sidecar(self) -> None:
+        """Launch context-mode sidecar if enabled."""
+        if not self.settings.enable_context_mode:
+            logger.info("Context-mode sidecar: DISABLED (enable_context_mode=false)")
+            return
+        logger.info("Context-mode sidecar: STARTING (npx -y context-mode)...")
+        try:
+            self._context_mode_process = subprocess.Popen(
+                ["npx", "-y", "context-mode"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            logger.info(
+                "Context-mode sidecar: STARTED (pid={}, enable_context_mode={})",
+                self._context_mode_process.pid,
+                self.settings.enable_context_mode,
+            )
+            atexit.register(self._stop_context_mode_sidecar_sync)
+            # Start health monitoring loop
+            asyncio.get_running_loop().call_later(
+                30.0, lambda: asyncio.create_task(self._health_check_loop())
+            )
+        except FileNotFoundError as e:
+            logger.error(
+                "Context-mode sidecar: FAILED (npx not found) - install Node.js/npm: {}",
+                e,
+            )
+        except Exception as e:
+            logger.error(
+                "Context-mode sidecar: FAILED ({}): {}",
+                type(e).__name__,
+                e,
+            )
+
+    async def _health_check_loop(self) -> None:
+        """Periodic health check for context-mode sidecar with auto-restart."""
+        while self.settings.enable_context_mode:
+            await asyncio.sleep(30.0)
+            if self._context_mode_process is None:
+                continue
+            # Check if process is still running
+            if self._context_mode_process.poll() is not None:
+                logger.warning(
+                    "Context-mode sidecar: CRASHED (pid={}, returncode={}), restarting...",
+                    self._context_mode_process.pid,
+                    self._context_mode_process.returncode,
+                )
+                await self._restart_context_mode_sidecar()
+            else:
+                logger.debug(
+                    "Context-mode sidecar: HEALTH CHECK OK (pid={})",
+                    self._context_mode_process.pid,
+                )
+
+    async def _restart_context_mode_sidecar(self) -> None:
+        """Restart context-mode sidecar after crash."""
+        if not self._context_mode_restart_lock.acquire(blocking=False):
+            logger.debug("Context-mode sidecar: RESTART SKIPPED (already restarting)")
+            return
+        try:
+            # Clean up old process handle
+            self._context_mode_process = None
+            await asyncio.sleep(1.0)
+            # Start new process
+            self._context_mode_process = subprocess.Popen(
+                ["npx", "-y", "context-mode"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            logger.info(
+                "Context-mode sidecar: RESTARTED (pid={})",
+                self._context_mode_process.pid,
+            )
+        except Exception as e:
+            logger.error(
+                "Context-mode sidecar: RESTART FAILED ({}): {}",
+                type(e).__name__,
+                e,
+            )
+        finally:
+            self._context_mode_restart_lock.release()
+
+    async def _stop_context_mode_sidecar(self) -> None:
+        """Kill context-mode sidecar on shutdown."""
+        if self._context_mode_process is None:
+            logger.debug("Context-mode sidecar: ALREADY STOPPED")
+            return
+        logger.info("Context-mode sidecar: STOPPING (pid={})...", self._context_mode_process.pid)
+        try:
+            os.killpg(os.getpgid(self._context_mode_process.pid), signal.SIGTERM)
+            self._context_mode_process.wait(timeout=3)
+            logger.info("Context-mode sidecar: STOPPED")
+        except ProcessLookupError:
+            logger.warning("Context-mode sidecar: PROCESS NOT FOUND (already exited?)")
+            self._context_mode_process = None
+        except subprocess.TimeoutExpired:
+            logger.warning("Context-mode sidecar: TIMEOUT - force killing...")
+            if self._context_mode_process:
+                self._context_mode_process.kill()
+            logger.info("Context-mode sidecar: FORCE KILLED")
+        except Exception as e:
+            logger.error(
+                "Context-mode sidecar: SHUTDOWN FAILED ({}): {}",
+                type(e).__name__,
+                e,
+            )
+        finally:
+            self._context_mode_process = None
+
+    def _stop_context_mode_sidecar_sync(self) -> None:
+        """Synchronous atexit handler for context-mode sidecar."""
+        if self._context_mode_process is None:
+            return
+        try:
+            os.killpg(os.getpgid(self._context_mode_process.pid), signal.SIGTERM)
+            self._context_mode_process.wait(timeout=3)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            if self._context_mode_process:
+                self._context_mode_process.kill()
+        except Exception:
+            pass
 
     async def _start_messaging_if_configured(self) -> None:
         try:

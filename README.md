@@ -53,14 +53,24 @@ uv self update
 uv python install 3.14
 ```
 
-### 2. Install context-mode (optional, for sandbox tools)
-   
-   Requires Node.js 18+. The proxy launches a context-mode sidecar for sandboxed execution,
-   FTS5 knowledge base search, and session continuity.
+### 2. Install Node.js Dependencies (required for context-mode)
 
-   ```bash
-   npm install
-   ```
+The proxy can launch a `context-mode` sidecar for sandboxed code execution and efficient tool routing.
+Requires Node.js 18+ and npm.
+
+```bash
+npm install
+```
+
+Enable in `.env`:
+```dotenv
+ENABLE_CONTEXT_MODE=true
+```
+
+When enabled, the proxy logs:
+- `Context-mode sidecar: STARTING...` on startup
+- `Context-mode sidecar: STARTED (pid=...)` when running
+- `Context-mode sidecar: STOPPED` on shutdown
 
 ### 3. Clone And Configure
 

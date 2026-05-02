@@ -14,6 +14,7 @@ from loguru import logger
 from config.settings import Settings
 from core.anthropic import get_token_count, get_user_facing_error_message
 from core.anthropic.sse import ANTHROPIC_SSE_RESPONSE_HEADERS
+from core.nudge import CONTEXT_MODE_NUDGE_SHORT
 from providers.base import BaseProvider
 from providers.exceptions import InvalidRequestError, ProviderError
 
@@ -64,6 +65,37 @@ async def _enriched_stream(
         thinking_enabled=thinking_enabled,
     ):
         yield chunk
+
+
+def _inject_context_mode_nudge(request: MessagesRequest) -> MessagesRequest:
+    """Append summarized context-mode rules to system prompt.
+
+    No-ops if already present (idempotent). Only injects when
+    settings.enable_context_mode is True.
+    """
+    needle = "CONTEXT-MODE RULES"
+    system = request.system
+
+    if isinstance(system, str) and needle in system:
+        return request
+    if isinstance(system, list) and any(
+        isinstance(b, dict) and needle in b.get("text", "")
+        for b in system
+    ):
+        return request
+
+    data = request.model_dump()
+    injection = CONTEXT_MODE_NUDGE_SHORT.strip()
+    if system is None:
+        data["system"] = injection
+    elif isinstance(system, str):
+        data["system"] = system + "\n\n" + injection
+    else:
+        blocks = [b if isinstance(b, dict) else b.model_dump() for b in system]
+        blocks.append({"type": "text", "text": injection})
+        data["system"] = blocks
+
+    return MessagesRequest(**data)
 
 
 def anthropic_sse_streaming_response(
@@ -224,6 +256,9 @@ class ClaudeProxyService:
             if _needs_web_injection:
                 forward_request = inject_web_search_system_prompt(forward_request)
                 logger.info("[5b] Injected web_search system prompt instruction")
+            if self._settings.enable_context_mode:
+                forward_request = _inject_context_mode_nudge(forward_request)
+                logger.info("[5c] Injected context-mode nudge (~50 tokens)")
             stripped_tools = [t.name for t in (forward_request.tools or [])]
             logger.info(
                 "[5/6] FORWARD: provider={} model={} messages={} tools={}",

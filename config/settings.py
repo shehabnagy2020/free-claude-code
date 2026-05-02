@@ -199,6 +199,13 @@ class Settings(BaseSettings):
         default=False, validation_alias="ENABLE_WEB_SERVER_TOOLS"
     )
     # Optional Tavily API key (tvly-...). Get yours at https://tavily.com.
+    tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY")
+
+    # ==================== Context-Mode Sidecar ====================
+    # Off by default: launches `npx -y context-mode` sidecar process for efficient tool routing.
+    enable_context_mode: bool = Field(
+        default=False, validation_alias="ENABLE_CONTEXT_MODE"
+    )
     # When set, web_search and web_fetch use the Tavily REST API.
     tavily_api_key: str = Field(default="", validation_alias="TAVILY_API_KEY")
     # Comma-separated URL schemes allowed for web_fetch (default: http,https).

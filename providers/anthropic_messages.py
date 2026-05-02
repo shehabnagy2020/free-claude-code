@@ -22,6 +22,7 @@ from core.anthropic.native_sse_block_policy import (
     NativeSseBlockPolicyState,
     transform_native_sse_block_event,
 )
+from core.chatter import ChatterStripper
 from providers.base import BaseProvider, ProviderConfig
 from providers.error_mapping import (
     map_error,
@@ -303,6 +304,7 @@ class AnthropicMessagesTransport(BaseProvider):
         sent_any_event = False
         state = self._new_stream_state(request, thinking_enabled=thinking_enabled)
         emitted_tracker = EmittedNativeSseTracker()
+        chatter_stripper = ChatterStripper()
 
         _MAX_STREAM_RETRIES = 2
 
@@ -341,9 +343,45 @@ class AnthropicMessagesTransport(BaseProvider):
                         state=state,
                         thinking_enabled=thinking_enabled,
                     ):
+                        # Apply chatter stripping to text deltas
+                        if '"type":"content_block_delta"' in chunk and '"text_delta"' in chunk:
+                            import json as _json
+                            try:
+                                for line in chunk.splitlines():
+                                    if line.startswith("data:"):
+                                        evt = _json.loads(line[5:].strip())
+                                        if evt.get("type") == "content_block_delta":
+                                            delta = evt.get("delta", {})
+                                            if delta.get("type") == "text_delta":
+                                                text = delta.get("text", "")
+                                                stripped = chatter_stripper.feed(text)
+                                                if stripped:
+                                                    delta["text"] = stripped
+                                                    chunk = f"data: {_json.dumps(evt, separators=(',', ':'))}\n\n"
+                                                elif text:
+                                                    # Text was buffered by stripper, skip this chunk
+                                                    continue
+                            except (_json.JSONDecodeError, KeyError):
+                                pass
                         sent_any_event = True
                         emitted_tracker.feed(chunk)
                         yield chunk
+
+                    # Flush any remaining chatter-buffered text
+                    chatter_held = chatter_stripper.flush()
+                    if chatter_held:
+                        logger.info(
+                            "{}_CHATTER: flush at stream end, len={}",
+                            tag,
+                            len(chatter_held),
+                        )
+                        import json as _json
+                        flush_event = {
+                            "type": "content_block_delta",
+                            "index": 0,
+                            "delta": {"type": "text_delta", "text": chatter_held},
+                        }
+                        yield f"data: {_json.dumps(flush_event, separators=(',', ':'))}\n\n"
 
                     break  # stream completed cleanly
 
