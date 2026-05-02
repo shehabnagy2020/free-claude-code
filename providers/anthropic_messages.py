@@ -342,14 +342,31 @@ class AnthropicMessagesTransport(BaseProvider):
                     _chatter_text_index: int | None = None
                     _chatter_buffered_text = ""
                     _chatter_flushed = False
+                    _chatter_synthetic_stop = False  # True after we emit a synthetic content_block_stop
 
                     async for chunk in self._iter_stream_chunks(
                         response,
                         state=state,
                         thinking_enabled=thinking_enabled,
                     ):
-                        # After the first text block is processed, pass everything through.
+                        # After the first text block is processed, pass everything through
+                        # (except a duplicate content_block_stop we already emitted).
                         if _chatter_flushed:
+                            if _chatter_synthetic_stop and '"content_block_stop"' in chunk:
+                                _suppress = False
+                                try:
+                                    for line in chunk.splitlines():
+                                        if line.startswith("data:"):
+                                            evt = json.loads(line[5:].strip())
+                                            if evt.get("type") == "content_block_stop" and evt.get("index") == (_chatter_text_index or 0):
+                                                _suppress = True
+                                                break
+                                except (json.JSONDecodeError, KeyError):
+                                    pass
+                                if _suppress:
+                                    _chatter_synthetic_stop = False
+                                    logger.info("{}_CHATTER: suppressed duplicate content_block_stop index={}", tag, _chatter_text_index or 0)
+                                    continue
                             sent_any_event = True
                             emitted_tracker.feed(chunk)
                             yield chunk
@@ -430,6 +447,7 @@ class AnthropicMessagesTransport(BaseProvider):
 
                         # Non-text events while buffering — flush first.
                         if _chatter_buffered_text:
+                            logger.info("{}_CHATTER: non-text event while buffering text, text_len={} chunk_snippet={}", tag, len(_chatter_buffered_text), chunk[:120])
                             held = chatter_stripper.flush()
                             logger.info("{}_CHATTER: flush on non-text event, original={} remaining={}", tag, len(_chatter_buffered_text), len(held))
                             if held:
@@ -438,9 +456,24 @@ class AnthropicMessagesTransport(BaseProvider):
                                     "index": _chatter_text_index or 0,
                                     "delta": {"type": "text_delta", "text": held},
                                 })
-                                yield f"data: {raw_evt}\n\n"
+                                raw_chunk = f"data: {raw_evt}\n\n"
+                                sent_any_event = True
+                                emitted_tracker.feed(raw_chunk)
+                                yield raw_chunk
+                            # Emit synthetic content_block_stop so the client sees a
+                            # well-formed stream (block close before next block open).
+                            logger.info("{}_CHATTER: emitting synthetic content_block_stop index={}", tag, _chatter_text_index or 0)
+                            stop_evt = json.dumps({
+                                "type": "content_block_stop",
+                                "index": _chatter_text_index or 0,
+                            })
+                            stop_chunk = f"data: {stop_evt}\n\n"
+                            sent_any_event = True
+                            emitted_tracker.feed(stop_chunk)
+                            yield stop_chunk
                             _chatter_buffered_text = ""
                             _chatter_flushed = True
+                            _chatter_synthetic_stop = True
 
                         sent_any_event = True
                         emitted_tracker.feed(chunk)
