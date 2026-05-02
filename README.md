@@ -68,9 +68,14 @@ ENABLE_CONTEXT_MODE=true
 ```
 
 When enabled, the proxy logs:
-- `Context-mode sidecar: STARTING...` on startup
+- `Context-mode sidecar: STARTING (npx -y context-mode)...` on startup
 - `Context-mode sidecar: STARTED (pid=...)` when running
 - `Context-mode sidecar: STOPPED` on shutdown
+
+The sidecar injects a ~35-token nudge into requests that routes tool usage to sandboxed functions:
+- `ctx_execute()` for data/file analysis
+- `ctx_fetch_and_index()` for web requests
+- `ctx_batch_execute()` for complex shell operations
 
 ### 3. Clone And Configure
 

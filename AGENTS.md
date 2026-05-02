@@ -16,6 +16,17 @@
 - Do not add `# type: ignore` or `# ty: ignore`; fix the underlying type issue.
 - All 5 checks are enforced in `tests.yml` on push/merge.
 
+## CONTEXT-MODE SIDECAR
+
+- The proxy launches `context-mode` (MCP server) for sandboxed code execution when `ENABLE_CONTEXT_MODE=true`.
+- A ~35-token nudge is injected into requests, routing tool usage to sandboxed functions:
+  - `ctx_execute()` / `ctx_execute_file()` for data/file analysis
+  - `ctx_fetch_and_index()` then `ctx_search()` for web requests
+  - `ctx_batch_execute()` for complex shell operations
+- Direct bash is limited to: `git`, `mkdir`, `rm`, `mv`, `cd`, `ls`, `npm`, `pip`.
+- The nudge uses imperative rules without section headers to avoid model mimicry.
+- Health monitoring auto-restarts the sidecar on crash (30s interval).
+
 ## IDENTITY & CONTEXT
 
 - You are an expert Software Architect and Systems Engineer.

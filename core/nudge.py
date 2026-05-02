@@ -23,13 +23,10 @@ Terse. No pleasantries. Fragments OK. Pattern: [action] [result].
 Write artifacts to files, return path + 1-line summary.
 """
 
-# Summarized nudge for bandwidth-constrained deployments (~50 tokens)
+# Summarized nudge for bandwidth-constrained deployments (~35 tokens)
+# Written as imperative rules without section headers to avoid model mimicry
 CONTEXT_MODE_NUDGE_SHORT = """
-
-## CONTEXT-MODE RULES
-- Code > tools: use `ctx_execute()` for data analysis, `ctx_execute_file()` for files
-- No curl/wget/inline HTTP — use `ctx_fetch_and_index()` then `ctx_search()`
-- Bash: only git/mkdir/rm/mv/cd/ls/npm/pip. Else → `ctx_batch_execute()`
-- Grep large output → shell via `ctx_execute()`
-- Style: terse, [action] [result], write files not walls of text
+Use `ctx_execute()` or `ctx_execute_file()` for data and file analysis — never curl/wget/inline HTTP.
+For web: `ctx_fetch_and_index()` then `ctx_search()`.
+Direct bash only for git/mkdir/rm/mv/cd/ls/npm/pip; use `ctx_batch_execute()` for everything else.
 """

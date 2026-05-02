@@ -73,7 +73,7 @@ def _inject_context_mode_nudge(request: MessagesRequest) -> MessagesRequest:
     No-ops if already present (idempotent). Only injects when
     settings.enable_context_mode is True.
     """
-    needle = "CONTEXT-MODE RULES"
+    needle = "ctx_execute()"
     system = request.system
 
     if isinstance(system, str) and needle in system:
@@ -258,7 +258,7 @@ class ClaudeProxyService:
                 logger.info("[5b] Injected web_search system prompt instruction")
             if self._settings.enable_context_mode:
                 forward_request = _inject_context_mode_nudge(forward_request)
-                logger.info("[5c] Injected context-mode nudge (~50 tokens)")
+                logger.info("[5c] Injected context-mode nudge (~35 tokens)")
             stripped_tools = [t.name for t in (forward_request.tools or [])]
             logger.info(
                 "[5/6] FORWARD: provider={} model={} messages={} tools={}",
