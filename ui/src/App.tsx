@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Login from "./components/Login";
+import DemoMode from "./components/DemoMode";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Header from "./components/Header";
@@ -10,6 +11,9 @@ export default function App() {
   // ── Auth ─────────────────────────────────────────────────────────────────
   const [token, setToken] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [demoMode, setDemoMode] = useState(
+    () => import.meta.env.VITE_DEMO_MODE === "true"
+  );
 
   // ── Data ─────────────────────────────────────────────────────────────────
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -31,6 +35,10 @@ export default function App() {
 
   // ── Verify stored token on mount ──────────────────────────────────────────
   useEffect(() => {
+    if (demoMode) {
+      setAuthChecked(true);
+      return;
+    }
     const stored = api.getStoredToken();
     if (!stored) {
       setAuthChecked(true);
@@ -351,7 +359,11 @@ export default function App() {
   }
 
   if (!token) {
-    return <Login onLogin={handleLogin} />;
+    return <Login onLogin={handleLogin} onDemo={() => setDemoMode(true)} />;
+  }
+
+  if (demoMode) {
+    return <DemoMode onExit={() => setDemoMode(false)} />;
   }
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;

@@ -3,9 +3,10 @@ import { login } from "../lib/api";
 
 interface Props {
   onLogin: (token: string) => void;
+  onDemo?: () => void;
 }
 
-export default function Login({ onLogin }: Props) {
+export default function Login({ onLogin, onDemo }: Props) {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +100,16 @@ export default function Login({ onLogin }: Props) {
               "Sign in"
             )}
           </button>
+
+          {onDemo && (
+            <button
+              type="button"
+              onClick={onDemo}
+              className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-surface-300 hover:text-white hover:bg-white/10 transition"
+            >
+              Try Demo
+            </button>
+          )}
         </form>
       </div>
     </div>
