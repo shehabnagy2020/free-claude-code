@@ -383,7 +383,7 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         for _item in _memory_items:
             _key = _item[:50].rstrip(".,;:")
             await db.upsert_global_memory(_key, _item)
-        logger.info("UI: extracted {} memory items from user message", len(_memory_items))
+        logger.info("UI: extracted {} memory items from user message: {}", len(_memory_items), _memory_items)
     # ---------------------------------------------------------------------------
 
     # Auto-title: set on the first user turn so the sidebar updates immediately,
@@ -472,6 +472,9 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         if _session_summary:
             _system_parts.append(_session_summary)
     _memory_system: str | None = "\n\n".join(_system_parts) if _system_parts else None
+    logger.info("UI system prompt: global_memory={} session_summary={} combined_len={}",
+                bool(_global_memory_text), bool(history and _session_summary) if history else False,
+                len(_memory_system) if _memory_system else 0)
     # ---------------------------------------------------------------------------
 
     async def _stream_and_save() -> AsyncIterator[str]:
@@ -484,6 +487,7 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
             if _tavily_system:
                 _prompt_parts.append(_tavily_system)
             _composed_system: str | None = "\n\n".join(_prompt_parts) if _prompt_parts else None
+            logger.info("UI composed system prompt len={} preview={}", len(_composed_system) if _composed_system else 0, (_composed_system or "")[:100])
 
             cur_request = MessagesRequest(
                 model=body.model,
