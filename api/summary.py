@@ -120,6 +120,7 @@ async def generate_summary(
         summary_text = "".join(text_parts).strip()
         if summary_text:
             await db.update_summary(session_id, summary_text)
+            await _extract_remember_items(db, summary_text)
             return summary_text
     except Exception as exc:
         logger.warning(
@@ -127,3 +128,14 @@ async def generate_summary(
         )
 
     return existing_summary
+
+
+async def _extract_remember_items(db: UIChatDB, summary_text: str) -> None:
+    """Parse REMEMBER: items from a summary and upsert them into global memory."""
+    import re
+    for match in re.finditer(r"REMEMBER:\s*(.+?)(?=\.?\s*REMEMBER:|\.?$)", summary_text):
+        item = match.group(1).strip().rstrip(".,;:")
+        if not item:
+            continue
+        key = item[:50].rstrip(".,;:")
+        await db.upsert_global_memory(key, item)

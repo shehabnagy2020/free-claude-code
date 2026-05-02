@@ -1,6 +1,6 @@
 // API client – all calls to /ui/api/*
 
-import type { Config, Message, ModelOption, Session } from "../types";
+import type { Config, MemoryEntry, Message, ModelOption, Session } from "../types";
 
 const BASE = "/ui/api";
 
@@ -187,6 +187,21 @@ export async function fetchSummary(
   } catch {
     return null;
   }
+}
+
+// ── Global Memory ────────────────────────────────────────────────────────────
+
+export async function fetchMemory(
+  token: string
+): Promise<MemoryEntry[]> {
+  return get<MemoryEntry[]>("/memory", token);
+}
+
+export async function deleteMemory(
+  token: string,
+  key: string
+): Promise<void> {
+  return del(`/memory/${encodeURIComponent(key)}`, token);
 }
 
 // ── Streaming chat ────────────────────────────────────────────────────────────

@@ -49,3 +49,9 @@ export interface AuthState {
   token: string | null;
   isAuthenticated: boolean;
 }
+
+export interface MemoryEntry {
+  key: string;
+  value: string;
+  updated_at: string;
+}

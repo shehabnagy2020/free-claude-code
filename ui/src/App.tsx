@@ -4,7 +4,7 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import Header from "./components/Header";
 import * as api from "./lib/api";
-import type { Message, ModelOption, Session, ImageAttachment } from "./types";
+import type { Message, ModelOption, Session, ImageAttachment, MemoryEntry } from "./types";
 
 export default function App() {
   // ── Auth ─────────────────────────────────────────────────────────────────
@@ -25,6 +25,7 @@ export default function App() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionSummary, setSessionSummary] = useState<string | null>(null);
+  const [globalMemory, setGlobalMemory] = useState<MemoryEntry[]>([]);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -59,9 +60,20 @@ export default function App() {
     }
   }, [token]);
 
+  const loadMemory = useCallback(async () => {
+    if (!token) return;
+    try {
+      const entries = await api.fetchMemory(token);
+      setGlobalMemory(entries);
+    } catch {
+      // silence
+    }
+  }, [token]);
+
   useEffect(() => {
     if (!token) return;
     void loadSessions();
+    void loadMemory();
     api
       .fetchConfig(token)
       .then((m) => {
@@ -276,6 +288,9 @@ export default function App() {
                 try {
                   const summary = await api.fetchSummary(token, activeSessionId);
                   if (summary !== null) setSessionSummary(summary);
+                  // Refresh global memory in case new REMEMBER items were extracted
+                  const entries = await api.fetchMemory(token);
+                  setGlobalMemory(entries);
                 } catch { /* best-effort */ }
               }
             }, 5000);
@@ -316,6 +331,15 @@ export default function App() {
     setStreamingText("");
   }, []);
 
+  const handleDeleteMemory = useCallback(
+    async (key: string) => {
+      if (!token) return;
+      await api.deleteMemory(token, key);
+      setGlobalMemory((prev) => prev.filter((m) => m.key !== key));
+    },
+    [token]
+  );
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!authChecked) {
@@ -353,10 +377,12 @@ export default function App() {
         <Sidebar
           sessions={sessions}
           activeSessionId={activeSessionId}
+          memory={globalMemory}
           onSelectSession={handleSelectSession}
           onNewChat={handleNewChat}
           onDeleteSession={handleDeleteSession}
           onRenameSession={handleRenameSession}
+          onDeleteMemory={handleDeleteMemory}
           onClose={() => setSidebarOpen(false)}
         />
       </aside>

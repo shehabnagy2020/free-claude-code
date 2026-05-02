@@ -75,6 +75,11 @@ class UIChatDB:
                 columns = await cursor.fetchall()
             if not any(col[1] == "summary" for col in columns):
                 await db.execute("ALTER TABLE sessions ADD COLUMN summary TEXT DEFAULT NULL")
+            # Create global_memory table
+            await db.execute(
+                "CREATE TABLE IF NOT EXISTS global_memory ("
+                "key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
             await db.commit()
 
     # ── Sessions ──────────────────────────────────────────────────────────────
@@ -280,3 +285,46 @@ class UIChatDB:
             }
             for row in reversed(rows)
         ]
+
+    # ── Global Memory ────────────────────────────────────────────────────────
+
+    async def get_all_global_memory(self) -> list[dict[str, Any]]:
+        """Return all global memory entries ordered by key."""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT key, value, updated_at FROM global_memory ORDER BY key"
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [
+            {"key": row["key"], "value": row["value"], "updated_at": row["updated_at"]}
+            for row in rows
+        ]
+
+    async def get_global_memory_text(self) -> str | None:
+        """Return all global memory entries as a formatted block, or None if empty."""
+        entries = await self.get_all_global_memory()
+        if not entries:
+            return None
+        lines = [f"- {e['value']}" for e in entries]
+        return "## Persistent Memory\n" + "\n".join(lines)
+
+    async def upsert_global_memory(self, key: str, value: str) -> None:
+        """Insert or update a global memory entry."""
+        now = _now()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "INSERT INTO global_memory (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
+                (key, value, now, value, now),
+            )
+            await db.commit()
+
+    async def delete_global_memory(self, key: str) -> bool:
+        """Delete a global memory entry. Returns True if deleted."""
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM global_memory WHERE key = ?", (key,)
+            )
+            await db.commit()
+        return (cursor.rowcount or 0) > 0

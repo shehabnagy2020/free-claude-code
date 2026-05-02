@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import os
-import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -22,9 +20,6 @@ if TYPE_CHECKING:
     from messaging.session import SessionStore
 
 _SHUTDOWN_TIMEOUT_S = 5.0
-
-# Track context-mode sidecar for cleanup.
-_ctx_mode_process: subprocess.Popen[str] | None = None
 
 
 async def best_effort(
@@ -66,56 +61,6 @@ def warn_if_process_auth_token(settings: Settings) -> None:
         )
 
 
-def _start_context_mode_sidecar() -> subprocess.Popen[str] | None:
-    """Launch context-mode MCP server as a managed sidecar process."""
-    try:
-        proc = subprocess.Popen(
-            ["npx", "-y", "context-mode"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        logger.info("Context-mode sidecar started (pid={})", proc.pid)
-        return proc
-    except FileNotFoundError:
-        logger.warning(
-            "npx not found — context-mode sidecar disabled. Install Node.js 18+ for sandbox tools."
-        )
-        return None
-    except Exception as exc:
-        logger.warning(
-            "Context-mode sidecar failed to start: exc_type={}",
-            type(exc).__name__,
-        )
-        return None
-
-
-def _stop_context_mode_sidecar(proc: subprocess.Popen[str] | None) -> None:
-    """Terminate the context-mode sidecar process."""
-    if proc is None:
-        return
-    if proc.poll() is not None:
-        return
-    try:
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=2)
-        logger.info("Context-mode sidecar stopped (pid={})", proc.pid)
-    except Exception as exc:
-        logger.warning(
-            "Context-mode sidecar shutdown error: exc_type={}",
-            type(exc).__name__,
-        )
-
-
-# Safety net: kill sidecar even if shutdown hooks don't fire.
-atexit.register(_stop_context_mode_sidecar, _ctx_mode_process)
-
-
 @dataclass(slots=True)
 class AppRuntime:
     """Own optional messaging, CLI, session, and provider runtime resources."""
@@ -140,12 +85,6 @@ class AppRuntime:
         self._provider_registry = ProviderRegistry()
         self.app.state.provider_registry = self._provider_registry
         warn_if_process_auth_token(self.settings)
-
-        global _ctx_mode_process
-        if self.settings.enable_context_mode:
-            _ctx_mode_process = _start_context_mode_sidecar()
-        else:
-            logger.info("Context-mode disabled (ENABLE_CONTEXT_MODE not set)")
 
         await self._start_messaging_if_configured()
         self._publish_state()
@@ -183,10 +122,6 @@ class AppRuntime:
                 self._provider_registry.cleanup(),
                 log_verbose_errors=verbose,
             )
-
-        global _ctx_mode_process
-        _stop_context_mode_sidecar(_ctx_mode_process)
-        _ctx_mode_process = None
 
         await self._shutdown_limiter()
         logger.info("Server shut down cleanly")

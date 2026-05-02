@@ -14,7 +14,6 @@ from loguru import logger
 from config.settings import Settings
 from core.anthropic import get_token_count, get_user_facing_error_message
 from core.anthropic.sse import ANTHROPIC_SSE_RESPONSE_HEADERS
-from core.nudge import CONTEXT_MODE_NUDGE
 from providers.base import BaseProvider
 from providers.exceptions import InvalidRequestError, ProviderError
 
@@ -112,36 +111,6 @@ def _log_unexpected_service_exception(
 def _require_non_empty_messages(messages: list[Any]) -> None:
     if not messages:
         raise InvalidRequestError("messages cannot be empty")
-
-
-def _inject_context_mode_system_prompt(request: MessagesRequest) -> MessagesRequest:
-    """Append context-mode efficiency rules to the system prompt.
-
-    No-ops if the instructions are already present (idempotent).
-    """
-    injection = CONTEXT_MODE_NUDGE
-    system = request.system
-    needle = "CONTEXT-MODE"
-
-    if isinstance(system, str) and needle in system:
-        return request
-    if isinstance(system, list) and any(
-        isinstance(b, dict) and needle in b.get("text", "")
-        for b in system
-    ):
-        return request
-
-    data = request.model_dump()
-    if system is None:
-        data["system"] = injection.strip()
-    elif isinstance(system, str):
-        data["system"] = system + injection
-    else:
-        blocks = [b if isinstance(b, dict) else b.model_dump() for b in system]
-        blocks.append({"type": "text", "text": injection.strip()})
-        data["system"] = blocks
-
-    return MessagesRequest(**data)
 
 
 class ClaudeProxyService:
@@ -255,11 +224,6 @@ class ClaudeProxyService:
             if _needs_web_injection:
                 forward_request = inject_web_search_system_prompt(forward_request)
                 logger.info("[5b] Injected web_search system prompt instruction")
-            if self._settings.enable_context_mode:
-                forward_request = _inject_context_mode_system_prompt(forward_request)
-                logger.info("[5c] Injected context-mode nudge")
-            else:
-                logger.debug("[5c] Context-mode disabled, skipping nudge")
             stripped_tools = [t.name for t in (forward_request.tools or [])]
             logger.info(
                 "[5/6] FORWARD: provider={} model={} messages={} tools={}",

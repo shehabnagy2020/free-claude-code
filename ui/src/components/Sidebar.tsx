@@ -1,14 +1,17 @@
 import { type KeyboardEvent, useCallback, useRef, useState } from "react";
 import { MessageSquare, PencilLine, Plus, Trash2, X } from "lucide-react";
-import type { Session } from "../types";
+import type { MemoryEntry, Session } from "../types";
+import GlobalMemoryPanel from "./GlobalMemoryPanel";
 
 interface Props {
   sessions: Session[];
   activeSessionId: string | null;
+  memory: MemoryEntry[];
   onSelectSession: (id: string) => void;
   onNewChat: () => void;
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string, title: string) => void;
+  onDeleteMemory: (key: string) => void;
   onClose: () => void;
 }
 
@@ -155,10 +158,12 @@ function SessionRow({
 export default function Sidebar({
   sessions,
   activeSessionId,
+  memory,
   onSelectSession,
   onNewChat,
   onDeleteSession,
   onRenameSession,
+  onDeleteMemory,
   onClose,
 }: Props) {
   return (
@@ -185,6 +190,11 @@ export default function Sidebar({
           New Chat
         </button>
       </div>
+
+      {/* Global memory panel */}
+      {memory.length > 0 && (
+        <GlobalMemoryPanel memory={memory} onDelete={onDeleteMemory} />
+      )}
 
       {/* Session list */}
       <ul className="custom-scrollbar flex-1 overflow-y-auto px-2 pb-3 space-y-0.5">

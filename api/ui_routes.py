@@ -275,6 +275,22 @@ async def _summarize_after_chat(
         )
 
 
+# ── Global Memory ────────────────────────────────────────────────────────────
+
+
+@ui_router.get("/memory")
+async def list_memory(_: Token, db: DB) -> list[dict[str, Any]]:
+    return await db.get_all_global_memory()
+
+
+@ui_router.delete("/memory/{key:path}")
+async def delete_memory(key: str, _: Token, db: DB) -> dict[str, bool]:
+    deleted = await db.delete_global_memory(key)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Memory entry not found")
+    return {"ok": True}
+
+
 # ── Streaming chat proxy ───────────────────────────────────────────────────────
 
 
@@ -386,16 +402,31 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
         except Exception as _search_err:
             logger.warning("UI proactive search failed: {}", _search_err)
     # ---------------------------------------------------------------------------
+    # --- Global memory injection into system prompt ---------------------------
+    _memory_system: str | None = None
+    if not history:  # first turn — inject global memory so new sessions know context
+        _memory_text = await db.get_global_memory_text()
+        if _memory_text:
+            _memory_system = _memory_text
+    # ---------------------------------------------------------------------------
 
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
         try:
+            # Compose system prompt: global memory + Tavily results
+            _system_parts: list[str] = []
+            if _memory_system:
+                _system_parts.append(_memory_system)
+            if _tavily_system:
+                _system_parts.append(_tavily_system)
+            _composed_system: str | None = "\n\n".join(_system_parts) if _system_parts else None
+
             cur_request = MessagesRequest(
                 model=body.model,
                 messages=loop_messages,  # type: ignore[arg-type]
                 max_tokens=body.max_tokens,
                 stream=True,
-                system=_tavily_system,
+                system=_composed_system,
             )
             resp = service.create_message(cur_request)
             stream_iter: AsyncIterator[str] = resp.body_iterator  # type: ignore[union-attr]
