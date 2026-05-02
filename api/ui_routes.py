@@ -466,11 +466,18 @@ async def chat(body: ChatRequest, request: Request, _: Token, db: DB) -> Streami
     _global_memory_text = await db.get_global_memory_text()
     if _global_memory_text:
         _system_parts.append(_global_memory_text)
-    # On follow-up turns, also inject the session summary for conversation context.
+    # On follow-up turns, inject the session summary for conversation context.
     if history:
         _session_summary = await db.get_summary(body.session_id)
         if _session_summary:
             _system_parts.append(_session_summary)
+        elif len(history) > 2:
+            # No summary yet — synthesize a brief context note from first user message
+            # so the model has an at-a-glance anchor for the conversation topic.
+            _first_user = next((m["content"] for m in history if m["role"] == "user"), None)
+            if _first_user and isinstance(_first_user, str):
+                _topic = _first_user.strip()[:100].replace("\n", " ")
+                _system_parts.append(f"## Session Context\nConversation topic: {_topic}")
     _memory_system: str | None = "\n\n".join(_system_parts) if _system_parts else None
     # ---------------------------------------------------------------------------
 

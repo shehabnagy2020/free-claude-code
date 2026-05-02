@@ -52,7 +52,7 @@ async def generate_summary(
     session_id: str,
     settings: Settings,
     provider_getter: Any,
-    model: str = "claude-opus-4-20250514",
+    model: str | None = None,
 ) -> str | None:
     """Generate or update a session summary via the LLM.
 
@@ -61,6 +61,10 @@ async def generate_summary(
 
     Returns the new summary text, or None if summarization is skipped/fails.
     """
+    # Resolve model: use caller's model if provided, else fall back to configured default.
+    if not model:
+        model = settings.model
+
     existing_summary = await db.get_summary(session_id)
     # Strip previous global memory section before sending to the LLM
     # so it doesn't compound across summary updates.
