@@ -71,7 +71,9 @@ _MEMORY_PATTERNS: list[_re.Pattern[str]] = [
     _re.compile(r"keep\s+(.+?)\s+in\s+mind(?:\.|$)", _re.IGNORECASE),
     # "keep in mind that X"
     _re.compile(r"keep\s+in\s+mind\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
-    # "note that X", "note X"
+    # "X, note that" — fact comes BEFORE the keyword
+    _re.compile(r"(.+?),\s*(?:please\s+)?note\s+(?:that\s*)?(?:\.|$)", _re.IGNORECASE),
+    # "note that X", "note X" — fact comes AFTER the keyword
     _re.compile(r"(?:please\s+)?note\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
     # "don't forget X", "do not forget X"
     _re.compile(r"don'?t\s+forget\s+(?:that\s+)?(.+?)(?:\.|$)", _re.IGNORECASE),
