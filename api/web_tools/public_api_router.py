@@ -85,26 +85,8 @@ def detect_intent(message: str) -> IntentResult:
             confidence=0.5,
         )
 
-    # ── Stock/Finance intent ─────────────────────────────────────────────────
-    if any(
-        kw in text_lower for kw in ["stock", "share price", "ticker", "stock price"]
-    ):
-        match = _STOCK_PATTERN.search(text)
-        if match:
-            # Pattern has 3 groups - find the non-None one
-            symbol = next((g for g in match.groups() if g), None)
-            if symbol:
-                symbol = symbol.upper()
-                # Skip if we matched a keyword instead of a real symbol
-                if symbol.lower() in ("price", "stock", "ticker"):
-                    logger.debug("Stock pattern matched keyword {!r}, skipping", symbol)
-                else:
-                    logger.info("Intent detected: stock quote for symbol={!r}", symbol)
-                    return IntentResult(
-                        intent="stock_quote",
-                        params={"symbol": symbol},
-                        confidence=0.85,
-                    )
+    # Note: Stock/Finance intent removed - Marketstack requires API key.
+    # Tavily handles financial queries instead.
 
     # ── Crypto intent ────────────────────────────────────────────────────────
     if any(
@@ -310,70 +292,8 @@ async def _fetch_weather(params: dict[str, Any]) -> str | None:
         return None
 
 
-async def _fetch_stock_quote(params: dict[str, Any]) -> str | None:
-    """Fetch stock price data."""
-    symbol = params.get("symbol")
-    if not symbol:
-        return None
-
-    client = _get_http_client()
-    api_def = PUBLIC_APIS.get("stock_quote")
-    if not api_def:
-        return None
-
-    # Note: Marketstack requires API key - return None if not configured
-    from config.settings import get_settings
-
-    settings = get_settings()
-    api_key = getattr(settings, "marketstack_api_key", None)
-
-    if not api_key:
-        logger.warning("Stock quote: marketstack_api_key not configured")
-        return None
-
-    try:
-        url = api_def.endpoint
-        query_params = {
-            "symbols": symbol,
-            "limit": "1",
-            "apikey": api_key,
-        }
-
-        logger.info(
-            "Fetching stock quote for {} from {}",
-            symbol,
-            api_def.name,
-        )
-
-        response = await client.get(url, params=query_params)
-        response.raise_for_status()
-        data = response.json()
-
-        results = data.get("data", [])
-        if not results:
-            return f"No data found for {symbol}"
-
-        quote = results[0]
-        close = quote.get("close")
-        change = quote.get("change")
-        change_pct = quote.get("change_pct")
-        date = quote.get("date", "")
-
-        result = (
-            f"{symbol}: ${close:.2f}"
-            f" ({'+' if change and change > 0 else ''}{change:.2f}, "
-            f"{'+' if change_pct and change_pct > 0 else ''}{change_pct:.2f}%)"
-            f" as of {date}"
-        )
-        logger.info("Stock quote fetched: {!r}", result)
-        return result
-
-    except httpx.HTTPError as e:
-        logger.warning("Stock quote API failed: {} - {}", type(e).__name__, e)
-        return None
-    except Exception as e:
-        logger.warning("Stock quote error: {}", e)
-        return None
+# Note: _fetch_stock_quote removed - Marketstack requires API key.
+# Tavily handles financial queries instead.
 
 
 async def _fetch_crypto_price(params: dict[str, Any]) -> str | None:
@@ -572,8 +492,6 @@ async def route_to_public_api(intent: str, params: dict[str, Any]) -> str | None
     # Dispatch to appropriate handler
     if intent == "weather":
         return await _fetch_weather(params)
-    elif intent == "stock_quote":
-        return await _fetch_stock_quote(params)
     elif intent == "crypto_price":
         return await _fetch_crypto_price(params)
     elif intent == "world_time":

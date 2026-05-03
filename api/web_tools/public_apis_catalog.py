@@ -72,60 +72,8 @@ PUBLIC_APIS: dict[str, APIDefinition] = {
         },
         category="weather",
     ),
-    # ── Finance ────────────────────────────────────────────────────────────────
-    "stock_quote": APIDefinition(
-        name="Marketstack",
-        description="Real-time and historical stock market data",
-        endpoint="http://api.marketstack.com/v1/eod",
-        method="GET",
-        auth="api_key",
-        auth_header="apikey",
-        params={
-            "symbols": "{symbol}",
-            "limit": "1",
-        },
-        response_mapping={
-            "symbol": "data[0].symbol",
-            "close": "data[0].close",
-            "date": "data[0].date",
-            "change": "data[0].change",
-            "change_pct": "data[0].change_pct",
-        },
-        category="finance",
-    ),
-    # ── Sports ─────────────────────────────────────────────────────────────────
-    "football_scores": APIDefinition(
-        name="API-Football (free tier)",
-        description="Live football/soccer scores and fixtures",
-        endpoint="https://v3.football.api-sports.io/fixtures",
-        method="GET",
-        auth="api_key",
-        auth_header="x-apisports-key",
-        params={
-            "live": "all",
-        },
-        response_mapping={
-            "fixtures": "response",
-        },
-        category="sports",
-    ),
-    # ── News ───────────────────────────────────────────────────────────────────
-    "news": APIDefinition(
-        name="NewsAPI",
-        description="Top headlines and breaking news",
-        endpoint="https://newsapi.org/v2/top-headlines",
-        method="GET",
-        auth="api_key",
-        auth_header="X-Api-Key",
-        params={
-            "country": "us",
-            "pageSize": "5",
-        },
-        response_mapping={
-            "articles": "articles",
-        },
-        category="news",
-    ),
+    # Note: APIs requiring API keys (Marketstack, API-Football, NewsAPI, etc.)
+    # have been removed. Use Tavily for these queries instead.
     # ── Crypto ─────────────────────────────────────────────────────────────────
     "crypto_price": APIDefinition(
         name="CoinGecko",
