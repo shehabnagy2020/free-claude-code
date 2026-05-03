@@ -25,7 +25,7 @@ Free Claude Code routes Anthropic Messages API traffic from Claude Code to NVIDI
 ## What You Get
 
 - Drop-in proxy for Claude Code's Anthropic API calls.
-- Six provider backends: NVIDIA NIM, OpenRouter, DeepSeek, LM Studio, llama.cpp, and Ollama.
+- Seven provider backends: NVIDIA NIM, Google Gemini, OpenRouter, DeepSeek, LM Studio, llama.cpp, and Ollama.
 - Per-model routing: send Opus, Sonnet, Haiku, and fallback traffic to different providers.
 - Streaming, tool use, reasoning/thinking block handling, and local request optimizations.
 - Optional Discord or Telegram bot wrapper for remote coding sessions.
@@ -146,6 +146,7 @@ provider_id/model/name
 | Provider | Prefix | Transport | Key | Default base URL |
 | --- | --- | --- | --- | --- |
 | NVIDIA NIM | `nvidia_nim/...` | OpenAI chat translation | `NVIDIA_NIM_API_KEY` | `https://integrate.api.nvidia.com/v1` |
+| Google Gemini | `google_gemini/...` | OpenAI chat translation | `GOOGLE_GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | OpenRouter | `open_router/...` | Anthropic Messages | `OPENROUTER_API_KEY` | `https://openrouter.ai/api/v1` |
 | DeepSeek | `deepseek/...` | Anthropic Messages | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/anthropic` |
 | LM Studio | `lmstudio/...` | Anthropic Messages | none | `http://localhost:1234/v1` |
@@ -170,6 +171,23 @@ Popular examples:
 - `nvidia_nim/minimaxai/minimax-m2.5`
 
 Browse models at [build.nvidia.com](https://build.nvidia.com/explore/discover). A cached model list is also kept in [`nvidia_nim_models.json`](nvidia_nim_models.json).
+
+</details>
+
+<details>
+<summary><b>Google Gemini</b></summary>
+
+Get a key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+
+```dotenv
+GOOGLE_GEMINI_API_KEY="your-gemini-key"
+MODEL="google_gemini/gemini-1.5-pro"
+```
+
+Gemini uses the OpenAI-compatible endpoint. Popular models:
+- `google_gemini/gemini-1.5-pro`
+- `google_gemini/gemini-1.5-flash`
+- `google_gemini/gemini-2.0-flash-exp`
 
 </details>
 
@@ -416,6 +434,7 @@ Blank per-tier values inherit the fallback. Blank thinking overrides inherit `EN
 
 ```dotenv
 NVIDIA_NIM_API_KEY=""
+GOOGLE_GEMINI_API_KEY=""
 OPENROUTER_API_KEY=""
 DEEPSEEK_API_KEY=""
 LM_STUDIO_BASE_URL="http://localhost:1234/v1"
@@ -427,6 +446,7 @@ Proxy settings are per provider:
 
 ```dotenv
 NVIDIA_NIM_PROXY=""
+GOOGLE_GEMINI_PROXY=""
 OPENROUTER_PROXY=""
 LMSTUDIO_PROXY=""
 LLAMACPP_PROXY=""

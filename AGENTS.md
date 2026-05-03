@@ -129,6 +129,6 @@
 - Discord and Telegram platforms support image attachments (PNG, JPEG, GIF, WebP)
 - Images are extracted, base64-encoded, and sent directly to the proxy API via `POST /v1/messages`
 - Image messages bypass the Claude CLI subprocess (images cannot be passed via `-p` command line flag)
-- OpenAI-compatible providers (NVIDIA NIM) receive images as `image_url` format; native Anthropic providers receive standard Anthropic image blocks
+- OpenAI-compatible providers (NVIDIA NIM, Google Gemini) receive images as `image_url` format; native Anthropic providers receive standard Anthropic image blocks
 - Test image handling with edge cases: empty captions, multiple images, unsupported formats
 - Key modules: `messaging/models.py` (ImageAttachment), `messaging/handler.py` (\_send_image_message_to_api), `messaging/platforms/discord.py` and `telegram.py` (image extraction), `core/anthropic/conversion.py` (OpenAI image_url conversion)
