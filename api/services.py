@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import traceback
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -11,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
+from config.provider_catalog import PROVIDER_CATALOG
 from config.settings import Settings
 from core.anthropic import get_token_count, get_user_facing_error_message
 from core.anthropic.sse import ANTHROPIC_SSE_RESPONSE_HEADERS
@@ -18,14 +20,13 @@ from core.nudge import CONTEXT_MODE_NUDGE_SHORT
 from providers.base import BaseProvider
 from providers.exceptions import InvalidRequestError, ProviderError
 
-from config.provider_catalog import PROVIDER_CATALOG
-
 from .model_router import ModelRouter
 from .models.anthropic import MessagesRequest, TokenCountRequest
 from .models.responses import TokenCountResponse
 from .optimization_handlers import try_optimizations
 from .web_tools.egress import WebFetchEgressPolicy
 from .web_tools.enrichment import enrich_empty_tool_results
+from .web_tools.public_api_router import process_message_for_public_api
 from .web_tools.request import (
     has_agent_web_tools,
     has_listed_anthropic_server_tools,
@@ -55,8 +56,13 @@ async def _enriched_stream(
     request_id: str,
     thinking_enabled: bool,
     tavily_api_key: str,
-) -> AsyncGenerator[str, None]:
-    """Enrich empty WebSearch/WebFetch tool_results via Tavily then stream from provider."""
+) -> AsyncGenerator[str]:
+    """Enrich empty WebSearch/WebFetch tool_results via Tavily then stream from provider.
+
+    Also performs proactive public API lookup for structured data (weather, crypto, etc.)
+    before the model sees the request.
+    """
+    # First: enrich tool results (Tavily + public API)
     enriched = await enrich_empty_tool_results(request, tavily_api_key=tavily_api_key)
     async for chunk in provider.stream_response(
         enriched,
@@ -263,6 +269,45 @@ class ClaudeProxyService:
             if _needs_web_injection:
                 forward_request = inject_web_search_system_prompt(forward_request)
                 logger.info("[5b] Injected web_search system prompt instruction")
+
+            # ── Proactive Public API Lookup ─────────────────────────────────────
+            # Extract user message and try public API before Tavily/LLM
+            _user_message = ""
+            if forward_request.messages:
+                last_msg = forward_request.messages[-1]
+                if last_msg.role == "user":
+                    _user_message = last_msg.content if isinstance(last_msg.content, str) else ""
+
+            _public_api_data: str | None = None
+            if _user_message:
+                try:
+                    # Run async function in sync context
+                    _public_api_data = asyncio.run(process_message_for_public_api(_user_message))
+                    if _public_api_data:
+                        # Inject as system prompt addition
+                        _api_prompt = f"## Live API Data\n{_public_api_data}\nUse this structured data to answer accurately."
+                        if forward_request.system:
+                            if isinstance(forward_request.system, str):
+                                forward_request.system = f"{forward_request.system}\n\n{_api_prompt}"
+                            else:
+                                # List format — append text block
+                                forward_request.system = [
+                                    *forward_request.system,
+                                    {"type": "text", "text": _api_prompt},
+                                ]
+                        else:
+                            forward_request.system = _api_prompt
+                        logger.info(
+                            "[5b-api] Injected public API data: intent detected in user message"
+                        )
+                except Exception as _api_err:
+                    logger.warning(
+                        "[5b-api] Public API lookup failed: {} - {}",
+                        type(_api_err).__name__,
+                        _api_err,
+                    )
+            # ────────────────────────────────────────────────────────────────────
+
             if self._settings.enable_context_mode:
                 forward_request = _inject_context_mode_nudge(forward_request)
                 logger.info("[5c] Injected context-mode nudge (~35 tokens)")
@@ -299,14 +344,20 @@ class ClaudeProxyService:
             # Enrich empty WebSearch/WebFetch tool_results with Tavily data before
             # the model sees them — does nothing if no empty results are present.
             if agent_web_tools and self._settings.enable_web_server_tools:
-                provider_stream: AsyncIterator[str] = _enriched_stream(
-                    forward_request,
-                    provider=provider,
-                    input_tokens=input_tokens,
-                    request_id=request_id,
-                    thinking_enabled=routed.resolved.thinking_enabled,
-                    tavily_api_key=self._settings.tavily_api_key,
-                )
+                # _enriched_stream is an async generator — we need to await it properly
+                # by wrapping in an async function that yields
+                async def _wrapped_enriched_stream() -> AsyncGenerator[str]:
+                    async for chunk in _enriched_stream(
+                        forward_request,
+                        provider=provider,
+                        input_tokens=input_tokens,
+                        request_id=request_id,
+                        thinking_enabled=routed.resolved.thinking_enabled,
+                        tavily_api_key=self._settings.tavily_api_key,
+                    ):
+                        yield chunk
+
+                provider_stream = _wrapped_enriched_stream()
             else:
                 provider_stream = provider.stream_response(
                     forward_request,

@@ -15,6 +15,7 @@ from loguru import logger
 from api.models.anthropic import Message, MessagesRequest
 
 from . import tavily as _tavily
+from .public_api_router import process_message_for_public_api
 from .streaming import _search_summary
 
 _AGENT_WEB_SEARCH_NAMES = frozenset({"WebSearch", "web_search"})
@@ -99,8 +100,40 @@ async def enrich_empty_tool_results(
     """Return an updated request where empty WebSearch/WebFetch tool_results are filled with Tavily data.
 
     This is a no-op if no empty results are found or if tavily_api_key is unset.
+
+    Public API Integration: Before Tavily, we check if the user message matches
+    a public API intent (weather, crypto, stocks, etc.) and use structured data directly.
     """
-    if not tavily_api_key or not request.messages:
+    if not request.messages:
+        return request
+
+    # ── Public API Lookup (before Tavily) ────────────────────────────────────
+    # Extract user message text for intent detection
+    _user_message = ""
+    if request.messages:
+        last_msg = request.messages[-1]
+        if last_msg.role == "user":
+            _user_message = last_msg.content if isinstance(last_msg.content, str) else ""
+
+    # Try public API first (works even without Tavily key)
+    _public_api_data: str | None = None
+    if _user_message:
+        try:
+            _public_api_data = await process_message_for_public_api(_user_message)
+            if _public_api_data:
+                logger.info(
+                    "enrichment: Public API returned data for query={!r}",
+                    _user_message[:80],
+                )
+        except Exception as _api_err:
+            logger.warning(
+                "enrichment: Public API lookup failed: {} - {}",
+                type(_api_err).__name__,
+                _api_err,
+            )
+    # ──────────────────────────────────────────────────────────────────────────
+
+    if not tavily_api_key:
         return request
 
     tool_use_index = _build_tool_use_index(request.messages)
@@ -189,12 +222,38 @@ async def enrich_empty_tool_results(
             except Exception as exc:
                 logger.warning("enrichment: tavily_fetch failed: {}", exc)
 
-    if not enrichments:
+    if not enrichments and not _public_api_data:
         return request
 
     # Rebuild the last message with enriched content.
     # Serialize to dicts so we can safely mutate and re-validate.
     msg_dict = last_msg.model_dump()
+
+    # If public API returned data, inject it as a tool_result-style block
+    # or prepend to existing content
+    if _public_api_data:
+        # Find the first tool_result block or add to content
+        injected = False
+        for idx, block in enumerate(msg_dict["content"]):
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                # Prepend public API data to existing content
+                existing = block.get("content", "")
+                block["content"] = f"## Live API Data\n{_public_api_data}\n\n{existing}"
+                injected = True
+                logger.info(
+                    "enrichment: Injected public API data into tool_result block {}",
+                    idx,
+                )
+                break
+
+        if not injected:
+            # No tool_result found — the API data will be used via system prompt
+            # This case shouldn't happen normally as we're in tool enrichment
+            logger.debug(
+                "enrichment: Public API data available but no tool_result to inject into"
+            )
+
+    # Apply Tavily enrichments
     for idx, new_text in enrichments.items():
         msg_dict["content"][idx]["content"] = new_text
 
