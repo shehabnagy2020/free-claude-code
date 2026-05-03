@@ -21,6 +21,7 @@ OPENROUTER_DEFAULT_BASE = "https://openrouter.ai/api/v1"
 LMSTUDIO_DEFAULT_BASE = "http://localhost:1234/v1"
 LLAMACPP_DEFAULT_BASE = "http://localhost:8080/v1"
 OLLAMA_DEFAULT_BASE = "http://localhost:11434"
+GOOGLE_GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +102,16 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             "native_anthropic",
             "local",
         ),
+    ),
+    "google_gemini": ProviderDescriptor(
+        provider_id="google_gemini",
+        transport_type="openai_chat",
+        credential_env="GOOGLE_GEMINI_API_KEY",
+        credential_url="https://aistudio.google.com/app/apikey",
+        credential_attr="google_gemini_api_key",
+        default_base_url=GOOGLE_GEMINI_DEFAULT_BASE,
+        proxy_attr="google_gemini_proxy",
+        capabilities=("chat", "streaming", "tools", "thinking"),
     ),
 }
 

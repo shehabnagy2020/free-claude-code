@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # ==================== DeepSeek Config ====================
     deepseek_api_key: str = Field(default="", validation_alias="DEEPSEEK_API_KEY")
 
+    # ==================== Google Gemini Config ====================
+    google_gemini_api_key: str = Field(
+        default="", validation_alias="GOOGLE_GEMINI_API_KEY"
+    )
+
     # ==================== Messaging Platform Selection ====================
     # Valid: "telegram" | "discord" | "none"
     messaging_platform: str = Field(
@@ -147,6 +152,7 @@ class Settings(BaseSettings):
 
     # ==================== Per-Provider Proxy ====================
     nvidia_nim_proxy: str = Field(default="", validation_alias="NVIDIA_NIM_PROXY")
+    google_gemini_proxy: str = Field(default="", validation_alias="GOOGLE_GEMINI_PROXY")
     open_router_proxy: str = Field(default="", validation_alias="OPENROUTER_PROXY")
     lmstudio_proxy: str = Field(default="", validation_alias="LMSTUDIO_PROXY")
     llamacpp_proxy: str = Field(default="", validation_alias="LLAMACPP_PROXY")

@@ -25,6 +25,12 @@ def _create_nvidia_nim(config: ProviderConfig, settings: Settings) -> BaseProvid
     return NvidiaNimProvider(config, nim_settings=settings.nim)
 
 
+def _create_google_gemini(config: ProviderConfig, _settings: Settings) -> BaseProvider:
+    from providers.google_gemini import GoogleGeminiProvider
+
+    return GoogleGeminiProvider(config)
+
+
 def _create_open_router(config: ProviderConfig, _settings: Settings) -> BaseProvider:
     from providers.open_router import OpenRouterProvider
 
@@ -57,6 +63,7 @@ def _create_ollama(config: ProviderConfig, _settings: Settings) -> BaseProvider:
 
 PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
     "nvidia_nim": _create_nvidia_nim,
+    "google_gemini": _create_google_gemini,
     "open_router": _create_open_router,
     "deepseek": _create_deepseek,
     "lmstudio": _create_lmstudio,
