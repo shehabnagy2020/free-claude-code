@@ -108,12 +108,32 @@ async def enrich_empty_tool_results(
         return request
 
     # ── Public API Lookup (before Tavily) ────────────────────────────────────
-    # Extract user message text for intent detection
+    # Extract the original user query that triggered the WebSearch tool.
+    # When Claude Code executes a tool, the flow is:
+    # 1. User: "What's the weather?"
+    # 2. Assistant: [tool_use: WebSearch query="weather..."]
+    # 3. User: [tool_result: empty]
+    # So we need to get the query from the tool_use input, not the last message.
     _user_message = ""
-    if request.messages:
+    _tool_use_index = _build_tool_use_index(request.messages)
+
+    # Find the WebSearch/WebFetch tool use and extract its query
+    for _tool_use_id, tool_info in _tool_use_index.items():
+        if tool_info["name"] in (_AGENT_WEB_SEARCH_NAMES | _AGENT_WEB_FETCH_NAMES):
+            inp = tool_info.get("input", {})
+            _user_message = inp.get("query", inp.get("url", ""))
+            if _user_message:
+                logger.info(
+                    "enrichment: Extracted query={!r} from tool_use for public API lookup",
+                    _user_message[:80],
+                )
+                break
+
+    # Also check last user message if no tool query found
+    if not _user_message and request.messages:
         last_msg = request.messages[-1]
-        if last_msg.role == "user":
-            _user_message = last_msg.content if isinstance(last_msg.content, str) else ""
+        if last_msg.role == "user" and isinstance(last_msg.content, str):
+            _user_message = last_msg.content
 
     # Try public API first (works even without Tavily key)
     _public_api_data: str | None = None
@@ -186,6 +206,23 @@ async def enrich_empty_tool_results(
             query: str = str(inp.get("query", inp.get("q", "")))
             if not query:
                 continue
+
+            # Skip Tavily if public API already returned data
+            if _public_api_data:
+                logger.info(
+                    "enrichment: Skipping Tavily - public API already returned data for query={!r}",
+                    query[:80],
+                )
+                # Inject public API data into this block
+                existing = block.get("content", "") if isinstance(block, dict) else ""
+                new_content = f"## Live API Data\n{_public_api_data}\n\nUse this structured data to answer accurately."
+                if isinstance(block, dict):
+                    block["content"] = new_content
+                else:
+                    block.content = new_content
+                enrichments[i] = new_content
+                continue
+
             # Append current year if no year-like token present — improves relevance.
             _year = str(datetime.now(UTC).year)
             if _year not in query:
