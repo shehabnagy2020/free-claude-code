@@ -22,6 +22,7 @@ from .services import ClaudeProxyService
 from .summary import generate_summary
 from .web_tools.tavily import tavily_fetch as _tavily_fetch
 from .web_tools.tavily import tavily_search as _tavily_search
+from .web_tools.public_api_router import process_message_for_public_api
 from .ui_db import UIChatDB
 
 ui_router = APIRouter(prefix="/ui/api")
@@ -625,12 +626,35 @@ async def chat(
     session_id = body.session_id
     loop_messages: list[dict[str, Any]] = list(api_messages)
 
+    # --- Public API lookup (before Tavily) -------------------------------------
+    # Try public APIs first for structured data (weather, stocks, crypto, etc.)
+    # Falls back to Tavily if no API match or API fails
+    _public_api_data: str | None = None
+    try:
+        _public_api_data = await process_message_for_public_api(body.content)
+        if _public_api_data:
+            logger.info(
+                "UI: Public API returned data for query: {!r}",
+                body.content[:80],
+            )
+    except Exception as _public_api_err:
+        logger.warning(
+            "UI: Public API lookup failed: {} - {}",
+            type(_public_api_err).__name__,
+            _public_api_err,
+        )
+        _public_api_data = None
+    # ---------------------------------------------------------------------------
+
     # --- Proactive Tavily search ------------------------------------------------
     # Detect real-time queries and inject Tavily results into the system prompt
     # before the LLM call. No tool round-trip — works with any model.
+    # Skipped if public API already returned data
     _user_text_lower = body.content.lower()
-    _needs_search = settings.tavily_api_key and any(
-        kw in _user_text_lower for kw in _REALTIME_KEYWORDS
+    _needs_search = (
+        settings.tavily_api_key
+        and any(kw in _user_text_lower for kw in _REALTIME_KEYWORDS)
+        and not _public_api_data  # Skip Tavily if public API succeeded
     )
     _tavily_system: str | None = None
     if _needs_search:
@@ -698,10 +722,15 @@ async def chat(
     async def _stream_and_save() -> AsyncIterator[str]:
         text_parts: list[str] = []
         try:
-            # Compose system prompt: global memory + Tavily results
+            # Compose system prompt: global memory + public API data + Tavily results
             _prompt_parts: list[str] = []
             if _memory_system:
                 _prompt_parts.append(_memory_system)
+            if _public_api_data:
+                _prompt_parts.append(
+                    f"## Live API Data\n{_public_api_data}\n"
+                    "Use this structured data to answer the user's query accurately."
+                )
             if _tavily_system:
                 _prompt_parts.append(_tavily_system)
             _composed_system: str | None = (
