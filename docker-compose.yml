@@ -1,5 +1,5 @@
 # Docker Compose for Claude Code Proxy
-# Supports all providers: NVIDIA NIM, OpenRouter, DeepSeek, Google Gemini, LM Studio, Llama.cpp, Ollama
+# Connects to local providers (Ollama, LM Studio, Llama.cpp) running on the host machine
 
 services:
   claude-code-proxy:
@@ -42,16 +42,16 @@ services:
       - GOOGLE_GEMINI_API_KEY=${GOOGLE_GEMINI_API_KEY:-}
       - GOOGLE_GEMINI_PROXY=${GOOGLE_GEMINI_PROXY:-}
 
-      # ==================== LM Studio ====================
-      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-http://lm-studio:1234/v1}
+      # ==================== LM Studio (host) ====================
+      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
       - LMSTUDIO_PROXY=${LMSTUDIO_PROXY:-}
 
-      # ==================== Llama.cpp ====================
-      - LLAMACPP_BASE_URL=${LLAMACPP_BASE_URL:-http://llama-cpp:8080/v1}
+      # ==================== Llama.cpp (host) ====================
+      - LLAMACPP_BASE_URL=${LLAMACPP_BASE_URL:-http://host.docker.internal:8080/v1}
       - LLAMACPP_PROXY=${LLAMACPP_PROXY:-}
 
-      # ==================== Ollama ====================
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      # ==================== Ollama (host) ====================
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
 
       # ==================== Authentication ====================
       - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
@@ -114,94 +114,6 @@ services:
       # Optional: Mount .env file
       - ${ENV_FILE:-./.env}:/app/.env:ro
     restart: unless-stopped
-    networks:
-      - claude-network
     extra_hosts:
-      # Allow container to access host services (for local providers)
+      # Allow container to access host services (for Ollama, LM Studio, Llama.cpp)
       - "host.docker.internal:host-gateway"
-    depends_on:
-      - ollama
-      - lm-studio
-
-  # Ollama service - Local LLM provider
-  # Pull and run models: docker exec ollama ollama pull llama3.2
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-    networks:
-      - claude-network
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  # LM Studio service - Local LLM provider with OpenAI-compatible API
-  # Note: LM Studio Desktop runs on host (Windows/Mac/Linux).
-  # For Docker, use the official LM Studio CLI or run host desktop app.
-  # This service is disabled by default - see README for setup.
-  # lm-studio:
-  #   image: ghcr.io/lmstudio-ai/lmstudio:latest
-  #   container_name: lm-studio
-  #   ports:
-  #     - "1234:1234"
-  #   volumes:
-  #     - lmstudio_models:/root/.cache/lmstudio
-  #   environment:
-  #     - LMSTUDIO_HOST=0.0.0.0
-  #     - LMSTUDIO_PORT=1234
-  #   restart: unless-stopped
-  #   networks:
-  #     - claude-network
-  #   # GPU required for inference (uncomment for NVIDIA GPU)
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
-
-  # Llama.cpp service - Lightweight local LLM inference
-  # Run models: docker exec llama-cpp ./llama-cli -m /models/your-model.gguf
-  llama-cpp:
-    image: ghcr.io/ggerganov/llama.cpp:server
-    container_name: llama-cpp
-    ports:
-      - "8080:8080"
-    volumes:
-      - llama_models:/models
-    environment:
-      - MODEL_PATH=/models/${LLAMA_CPP_MODEL:-}
-      - HOST=0.0.0.0
-      - PORT=8080
-    restart: unless-stopped
-    networks:
-      - claude-network
-    # GPU acceleration (uncomment for NVIDIA GPU)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-
-volumes:
-  ollama_data:
-    driver: local
-  lmstudio_models:
-    driver: local
-  llama_models:
-    driver: local
-
-networks:
-  claude-network:
-    driver: bridge
