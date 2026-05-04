@@ -10,8 +10,7 @@ services:
         # Optional: Build-time arguments
         BUILDKIT_INLINE_CACHE: "1"
     container_name: claude-code-proxy
-    ports:
-      - "8082:8082"
+    network_mode: host
     environment:
       # ==================== Server Config ====================
       - HOST=0.0.0.0
@@ -43,15 +42,15 @@ services:
       - GOOGLE_GEMINI_PROXY=${GOOGLE_GEMINI_PROXY:-}
 
       # ==================== LM Studio (host) ====================
-      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      - LM_STUDIO_BASE_URL=${LM_STUDIO_BASE_URL:-http://127.0.0.1:1234/v1}
       - LMSTUDIO_PROXY=${LMSTUDIO_PROXY:-}
 
       # ==================== Llama.cpp (host) ====================
-      - LLAMACPP_BASE_URL=${LLAMACPP_BASE_URL:-http://host.docker.internal:8080/v1}
+      - LLAMACPP_BASE_URL=${LLAMACPP_BASE_URL:-http://127.0.0.1:8080/v1}
       - LLAMACPP_PROXY=${LLAMACPP_PROXY:-}
 
       # ==================== Ollama (host) ====================
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://127.0.0.1:11434}
 
       # ==================== Authentication ====================
       - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
@@ -108,12 +107,18 @@ services:
       - LOG_RAW_MESSAGING_CONTENT=${LOG_RAW_MESSAGING_CONTENT:-false}
       - LOG_RAW_CLI_DIAGNOSTICS=${LOG_RAW_CLI_DIAGNOSTICS:-false}
       - LOG_MESSAGING_ERROR_DETAILS=${LOG_MESSAGING_ERROR_DETAILS:-false}
+
+      # ==================== Performance ====================
+      # Higher concurrency for PM2-like throughput
+      - PROVIDER_MAX_CONCURRENCY=${PROVIDER_MAX_CONCURRENCY:-10}
     volumes:
       # Workspace for Claude Code agent
       - ./agent_workspace:/app/agent_workspace
-      # Optional: Mount .env file
-      - ${ENV_FILE:-./.env}:/app/.env:ro
+      # Mount .env file for runtime configuration
+      - ./.env:/app/.env:ro
     restart: unless-stopped
-    extra_hosts:
-      # Allow container to access host services (for Ollama, LM Studio, Llama.cpp)
-      - "host.docker.internal:host-gateway"
+    healthcheck:
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
