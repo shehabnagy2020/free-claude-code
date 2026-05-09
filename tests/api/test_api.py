@@ -53,9 +53,12 @@ def test_models_list(client: TestClient):
     data = response.json()
     assert data["has_more"] is False
     ids = [item["id"] for item in data["data"]]
-    assert "claude-sonnet-4-20250514" in ids
+    assert len(ids) >= 1
     assert data["first_id"] == ids[0]
     assert data["last_id"] == ids[-1]
+    # Gateway-prefixed model IDs should be present
+    anthropic_ids = [i for i in ids if i.startswith("anthropic/")]
+    assert len(anthropic_ids) >= 1
 
 
 def test_probe_endpoints_return_204_with_allow_headers(client: TestClient):

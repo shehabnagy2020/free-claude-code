@@ -175,7 +175,7 @@ def _provider_smoke_thinking_enabled(
     descriptor = PROVIDER_CATALOG[provider_model.provider]
     return (
         "thinking" in descriptor.capabilities
-        and smoke_config.settings.resolve_thinking("claude-sonnet-4-5-20250929")
+        and smoke_config.settings.resolve_thinking(provider_model.full_model)
     )
 
 

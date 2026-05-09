@@ -276,19 +276,25 @@ class ClaudeProxyService:
             if forward_request.messages:
                 last_msg = forward_request.messages[-1]
                 if last_msg.role == "user":
-                    _user_message = last_msg.content if isinstance(last_msg.content, str) else ""
+                    _user_message = (
+                        last_msg.content if isinstance(last_msg.content, str) else ""
+                    )
 
             _public_api_data: str | None = None
             if _user_message:
                 try:
                     # Run async function in sync context
-                    _public_api_data = asyncio.run(process_message_for_public_api(_user_message))
+                    _public_api_data = asyncio.run(
+                        process_message_for_public_api(_user_message)
+                    )
                     if _public_api_data:
                         # Inject as system prompt addition
                         _api_prompt = f"## Live API Data\n{_public_api_data}\nUse this structured data to answer accurately."
                         if forward_request.system:
                             if isinstance(forward_request.system, str):
-                                forward_request.system = f"{forward_request.system}\n\n{_api_prompt}"
+                                forward_request.system = (
+                                    f"{forward_request.system}\n\n{_api_prompt}"
+                                )
                             else:
                                 # List format — append text block
                                 forward_request.system = [

@@ -1,7 +1,9 @@
 """Centralized configuration using Pydantic Settings."""
 
 import os
+import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .constants import HTTP_CONNECT_TIMEOUT_DEFAULT
 from .nim import NimSettings
 from .provider_ids import SUPPORTED_PROVIDER_IDS
+
+
+@dataclass(frozen=True, slots=True)
+class CustomModelEntry:
+    """A user-defined model entry discovered from MODEL_N environment variables."""
+
+    model_ref: str
+    thinking_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ConfiguredChatModelRef:
+    """A provider/model ref with its source env key."""
+
+    model_ref: str
+    provider_id: str
+    model_id: str
+    sources: tuple[str, ...]
 
 
 def _env_files() -> tuple[Path, ...]:
@@ -67,29 +87,84 @@ def _env_file_override(model_config: Mapping[str, Any], key: str) -> str | None:
     return configured_value
 
 
-def _removed_env_var_message(model_config: Mapping[str, Any]) -> str | None:
-    """Return a migration error for removed env vars, if present."""
-    removed_keys = ("NIM_ENABLE_THINKING", "ENABLE_THINKING")
-    replacement = (
-        "ENABLE_MODEL_THINKING, ENABLE_OPUS_THINKING, "
-        "ENABLE_SONNET_THINKING, or ENABLE_HAIKU_THINKING"
-    )
+_CUSTOM_MODEL_PATTERN = re.compile(r"^MODEL_(\d+)$")
 
-    for removed_key in removed_keys:
-        if removed_key in os.environ:
-            return (
-                f"{removed_key} has been removed in this release. "
-                f"Rename it to {replacement}."
-            )
 
-        for env_file in _configured_env_files(model_config):
-            if _env_file_contains_key(env_file, removed_key):
-                return (
-                    f"{removed_key} has been removed in this release. "
-                    f"Rename it to {replacement}. Found in {env_file}."
+def _discover_custom_models(
+    env_sources: Mapping[str, str],
+    enable_model_thinking: bool,
+) -> dict[str, CustomModelEntry]:
+    """Scan env sources for MODEL_N keys and build ordered custom models dict.
+
+    Args:
+        env_sources: Merged env key-value pairs (dotenv then process env).
+        enable_model_thinking: Global default for thinking.
+
+    Returns:
+        Ordered dict keyed by model ref (e.g. "ollama/glm-5.1:cloud").
+    """
+    indexed: list[tuple[int, str]] = []
+    for key, value in env_sources.items():
+        m = _CUSTOM_MODEL_PATTERN.match(key)
+        if m and value.strip():
+            idx = int(m.group(1))
+            model_ref = value.strip()
+            if "/" not in model_ref:
+                raise ValueError(
+                    f"MODEL_{idx} must be prefixed with provider type. "
+                    f"Valid providers: {', '.join(SUPPORTED_PROVIDER_IDS)}. "
+                    f"Format: provider_type/model/name"
                 )
+            provider = model_ref.split("/", 1)[0]
+            if provider not in SUPPORTED_PROVIDER_IDS:
+                supported = ", ".join(f"'{p}'" for p in SUPPORTED_PROVIDER_IDS)
+                raise ValueError(
+                    f"MODEL_{idx}: Invalid provider '{provider}'. Supported: {supported}"
+                )
+            indexed.append((idx, model_ref))
 
-    return None
+    indexed.sort(key=lambda t: t[0])
+
+    custom: dict[str, CustomModelEntry] = {}
+    for idx, model_ref in indexed:
+        thinking_key = f"ENABLE_MODEL_{idx}_THINKING"
+        thinking_val = env_sources.get(thinking_key, "").strip().lower()
+        if thinking_val in ("true", "1", "yes"):
+            thinking = True
+        elif thinking_val in ("false", "0", "no"):
+            thinking = False
+        else:
+            thinking = enable_model_thinking
+        custom[model_ref] = CustomModelEntry(
+            model_ref=model_ref,
+            thinking_enabled=thinking,
+        )
+
+    return custom
+
+
+def _merge_env_for_custom_models(model_config: Mapping[str, Any]) -> dict[str, str]:
+    """Merge dotenv file values with process env, process env takes precedence."""
+    merged: dict[str, str] = {}
+    for env_file in _configured_env_files(model_config):
+        try:
+            values = dotenv_values(env_file)
+        except OSError:
+            continue
+        merged.update({k: v for k, v in values.items() if v is not None})
+    merged.update({k: v for k, v in os.environ.items() if v is not None})
+    return merged
+
+
+def provider_display(model_str: str) -> str:
+    """Convert 'provider_type/model/name' to human-readable provider label."""
+    if not model_str:
+        return ""
+    parts = model_str.split("/", 1)
+    provider_id = parts[0]
+    model_name = parts[1] if len(parts) > 1 else ""
+    provider_label = provider_id.replace("_", " ").title()
+    return f"{provider_label} › {model_name}" if model_name else provider_label  # noqa: RUF001
 
 
 class Settings(BaseSettings):
@@ -140,15 +215,13 @@ class Settings(BaseSettings):
     )
 
     # ==================== Model ====================
-    # All Claude model requests are mapped to this single model (fallback)
+    # Default model: used when no MODEL_N custom models match.
     # Format: provider_type/model/name
     model: str = "nvidia_nim/z-ai/glm4.7"
 
-    # Per-model overrides (optional, falls back to MODEL)
-    # Each can use a different provider
-    model_opus: str | None = Field(default=None, validation_alias="MODEL_OPUS")
-    model_sonnet: str | None = Field(default=None, validation_alias="MODEL_SONNET")
-    model_haiku: str | None = Field(default=None, validation_alias="MODEL_HAIKU")
+    # Dynamic custom models discovered from MODEL_N env vars.
+    # Populated by discover_custom_models validator.
+    custom_models: dict[str, CustomModelEntry] = Field(default_factory=dict)
 
     # ==================== Per-Provider Proxy ====================
     nvidia_nim_proxy: str = Field(default="", validation_alias="NVIDIA_NIM_PROXY")
@@ -167,15 +240,6 @@ class Settings(BaseSettings):
     )
     enable_model_thinking: bool = Field(
         default=True, validation_alias="ENABLE_MODEL_THINKING"
-    )
-    enable_opus_thinking: bool | None = Field(
-        default=None, validation_alias="ENABLE_OPUS_THINKING"
-    )
-    enable_sonnet_thinking: bool | None = Field(
-        default=None, validation_alias="ENABLE_SONNET_THINKING"
-    )
-    enable_haiku_thinking: bool | None = Field(
-        default=None, validation_alias="ENABLE_HAIKU_THINKING"
     )
 
     # ==================== HTTP Client Timeouts ====================
@@ -306,22 +370,41 @@ class Settings(BaseSettings):
     @classmethod
     def reject_removed_env_vars(cls, data: Any) -> Any:
         """Fail fast when removed environment variables are still configured."""
-        if message := _removed_env_var_message(cls.model_config):
-            raise ValueError(message)
+        removed_keys = (
+            "NIM_ENABLE_THINKING",
+            "ENABLE_THINKING",
+            "MODEL_OPUS",
+            "MODEL_SONNET",
+            "MODEL_HAIKU",
+            "ENABLE_OPUS_THINKING",
+            "ENABLE_SONNET_THINKING",
+            "ENABLE_HAIKU_THINKING",
+        )
+        replacement = "MODEL_N (e.g. MODEL_1) and ENABLE_MODEL_N_THINKING (e.g. ENABLE_MODEL_1_THINKING)"
+
+        for removed_key in removed_keys:
+            if removed_key in os.environ:
+                raise ValueError(
+                    f"{removed_key} has been removed in this release. "
+                    f"Use {replacement} instead."
+                )
+
+            for env_file in _configured_env_files(
+                data if isinstance(data, dict) else {}
+            ):
+                if _env_file_contains_key(env_file, removed_key):
+                    raise ValueError(
+                        f"{removed_key} has been removed in this release. "
+                        f"Use {replacement} instead. Found in {env_file}."
+                    )
+
         return data
 
-    # Handle empty strings for optional string fields
     @field_validator(
         "telegram_bot_token",
         "allowed_telegram_user_id",
         "discord_bot_token",
         "allowed_discord_channels",
-        "model_opus",
-        "model_sonnet",
-        "model_haiku",
-        "enable_opus_thinking",
-        "enable_sonnet_thinking",
-        "enable_haiku_thinking",
         mode="before",
     )
     @classmethod
@@ -392,11 +475,9 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("model", "model_opus", "model_sonnet", "model_haiku")
+    @field_validator("model")
     @classmethod
-    def validate_model_format(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
+    def validate_model_format(cls, v: str) -> str:
         if "/" not in v:
             raise ValueError(
                 f"Model must be prefixed with provider type. "
@@ -410,7 +491,14 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def auto_enable_web_tools_for_tavily(self) -> "Settings":
+    def discover_custom_models(self) -> Settings:
+        """Scan env vars and dotenv files for MODEL_N entries."""
+        merged = _merge_env_for_custom_models(self.model_config)
+        self.custom_models = _discover_custom_models(merged, self.enable_model_thinking)
+        return self
+
+    @model_validator(mode="after")
+    def auto_enable_web_tools_for_tavily(self) -> Settings:
         """Auto-enable web server tools when a Tavily API key is configured."""
         if self.tavily_api_key and not self.enable_web_server_tools:
             self.enable_web_server_tools = True
@@ -453,31 +541,87 @@ class Settings(BaseSettings):
         """Extract the actual model name from the default model string."""
         return Settings.parse_model_name(self.model)
 
-    def resolve_model(self, claude_model_name: str) -> str:
-        """Resolve a Claude model name to the configured provider/model string.
+    def configured_chat_model_refs(self) -> tuple[ConfiguredChatModelRef, ...]:
+        """Return unique configured chat provider/model refs with source env keys."""
+        sources_by_ref: dict[str, list[str]] = {}
+        sources_by_ref.setdefault(self.model, []).append("MODEL")
+        for entry in self.custom_models.values():
+            sources_by_ref.setdefault(entry.model_ref, []).append("MODEL_N")
 
-        Classifies the incoming Claude model (opus/sonnet/haiku) and
-        returns the model-specific override if configured, otherwise the fallback MODEL.
+        return tuple(
+            ConfiguredChatModelRef(
+                model_ref=model_ref,
+                provider_id=Settings.parse_provider_type(model_ref),
+                model_id=Settings.parse_model_name(model_ref),
+                sources=tuple(sources),
+            )
+            for model_ref, sources in sources_by_ref.items()
+        )
+
+    def resolve_model(self, model_name: str) -> str:
+        """Resolve a model name to the configured provider/model string.
+
+        Handles gateway-prefixed IDs (e.g. "anthropic/nvidia_nim/z-ai/glm4.7")
+        by stripping the prefix. Falls back to default MODEL for unknown names.
         """
-        name_lower = claude_model_name.lower()
-        if "opus" in name_lower and self.model_opus is not None:
-            return self.model_opus
-        if "haiku" in name_lower and self.model_haiku is not None:
-            return self.model_haiku
-        if "sonnet" in name_lower and self.model_sonnet is not None:
-            return self.model_sonnet
+        # Gateway-prefixed model IDs
+        if model_name.startswith("anthropic/") or model_name.startswith(
+            "claude-3-freecc-no-thinking/"
+        ):
+            _, _, remainder = model_name.partition("/")
+            # remainder is like "nvidia_nim/z-ai/glm4.7"
+            if remainder in self.custom_models:
+                return remainder
+            # Only accept remainder if it has a known provider prefix
+            provider = remainder.split("/", 1)[0] if "/" in remainder else ""
+            if provider in SUPPORTED_PROVIDER_IDS:
+                return remainder
+            return self.model
+
+        # Direct provider-prefixed model IDs
+        if model_name in self.custom_models:
+            return self.custom_models[model_name].model_ref
         return self.model
 
-    def resolve_thinking(self, claude_model_name: str) -> bool:
-        """Resolve whether thinking is enabled for an incoming Claude model name."""
-        name_lower = claude_model_name.lower()
-        if "opus" in name_lower and self.enable_opus_thinking is not None:
-            return self.enable_opus_thinking
-        if "haiku" in name_lower and self.enable_haiku_thinking is not None:
-            return self.enable_haiku_thinking
-        if "sonnet" in name_lower and self.enable_sonnet_thinking is not None:
-            return self.enable_sonnet_thinking
+    def resolve_thinking(self, model_name: str) -> bool:
+        """Resolve whether thinking is enabled for a model name."""
+        # No-thinking gateway prefix explicitly disables thinking
+        if model_name.startswith("claude-3-freecc-no-thinking/"):
+            return False
+        # Anthropic gateway prefix inherits per-model thinking setting
+        if model_name.startswith("anthropic/"):
+            _, _, remainder = model_name.partition("/")
+            if remainder in self.custom_models:
+                return self.custom_models[remainder].thinking_enabled
+            return self.enable_model_thinking
+
+        if model_name in self.custom_models:
+            return self.custom_models[model_name].thinking_enabled
         return self.enable_model_thinking
+
+    def get_models_list(self) -> list[dict[str, str]]:
+        """Return list of model dicts for /v1/models and UI config endpoints.
+
+        Each dict has keys: id, display_name, created_at.
+        When custom models are defined, uses them directly.
+        Otherwise falls back to the default model only.
+        """
+        if self.custom_models:
+            return [
+                {
+                    "id": model_ref,
+                    "display_name": provider_display(model_ref),
+                    "created_at": "2025-01-01T00:00:00Z",
+                }
+                for model_ref in self.custom_models
+            ]
+        return [
+            {
+                "id": self.model,
+                "display_name": provider_display(self.model),
+                "created_at": "2025-01-01T00:00:00Z",
+            }
+        ]
 
     def web_fetch_allowed_scheme_set(self) -> frozenset[str]:
         """Return normalized schemes allowed for web_fetch."""

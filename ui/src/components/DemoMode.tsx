@@ -15,22 +15,10 @@ const NOW = new Date().toISOString();
 
 const DEMO_MODELS: ModelOption[] = [
   {
-    label: "Claude Opus 4",
-    claude_model: "claude-opus-4-20250514",
-    provider_display: "Anthropic",
+    label: "Nvidia Nim › z-ai/glm4.7",
+    claude_model: "anthropic/nvidia_nim/z-ai/glm4.7",
+    provider_display: "Nvidia Nim › z-ai/glm4.7",
     is_default: true,
-  },
-  {
-    label: "Claude Sonnet 4",
-    claude_model: "claude-sonnet-4-20250514",
-    provider_display: "Anthropic",
-    is_default: false,
-  },
-  {
-    label: "Claude Haiku 4",
-    claude_model: "claude-haiku-4-20250514",
-    provider_display: "Anthropic",
-    is_default: false,
   },
 ];
 

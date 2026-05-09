@@ -69,9 +69,8 @@ def test_per_model_thinking_config_e2e(smoke_config: SmokeConfig, tmp_path) -> N
     env_file = tmp_path / "thinking.env"
     env_file.write_text(
         'ENABLE_MODEL_THINKING="false"\n'
-        'ENABLE_OPUS_THINKING="true"\n'
-        "ENABLE_SONNET_THINKING=\n"
-        'ENABLE_HAIKU_THINKING="false"\n',
+        'MODEL_1="nvidia_nim/z-ai/glm4.7"\n'
+        'ENABLE_MODEL_1_THINKING="true"\n',
         encoding="utf-8",
     )
     env = os.environ.copy()
@@ -79,9 +78,7 @@ def test_per_model_thinking_config_e2e(smoke_config: SmokeConfig, tmp_path) -> N
     script = (
         "from config.settings import Settings; "
         "s=Settings(); "
-        "print(s.resolve_thinking('claude-opus-4-20250514')); "
-        "print(s.resolve_thinking('claude-sonnet-4-20250514')); "
-        "print(s.resolve_thinking('claude-haiku-4-20250514')); "
+        "print(s.resolve_thinking('nvidia_nim/z-ai/glm4.7')); "
         "print(s.resolve_thinking('unknown-model'))"
     )
     result = subprocess.run(
@@ -94,7 +91,7 @@ def test_per_model_thinking_config_e2e(smoke_config: SmokeConfig, tmp_path) -> N
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == ["True", "False", "False", "False"]
+    assert result.stdout.splitlines() == ["True", "False"]
 
 
 @pytest.mark.smoke_target("config")

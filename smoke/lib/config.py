@@ -121,11 +121,10 @@ class SmokeConfig:
         return any(name in self.targets for name in names)
 
     def provider_models(self) -> list[ProviderModel]:
-        candidates = (
-            ("MODEL", self.settings.model),
-            ("MODEL_OPUS", self.settings.model_opus),
-            ("MODEL_SONNET", self.settings.model_sonnet),
-            ("MODEL_HAIKU", self.settings.model_haiku),
+        candidates: list[tuple[str, str]] = [("MODEL", self.settings.model)]
+        candidates.extend(
+            ("MODEL_N", entry.model_ref)
+            for entry in self.settings.custom_models.values()
         )
         seen: set[str] = set()
         models: list[ProviderModel] = []

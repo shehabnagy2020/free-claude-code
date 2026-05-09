@@ -13,6 +13,17 @@
 - All CI checks must pass; failing checks block merge.
 - Add tests for new changes (including edge cases), then run `uv run pytest`.
 - Run checks in this order: `uv run ruff format`, `uv run ruff check`, `uv run ty check`, `uv run pytest`.
+
+## CUSTOM MODELS (`MODEL_N`)
+
+- **Dynamic model system**: Models are defined via `MODEL_N` env vars (e.g. `MODEL_1=ollama/glm-5.1:cloud`, `MODEL_2=open_router/deepseek/deepseek-r1`). No hardcoded Claude model IDs.
+- **Format**: `MODEL_N=provider_type/model_name` where provider_type must be in `SUPPORTED_PROVIDER_IDS`.
+- **Gateway model IDs**: Custom models are advertised to Claude Code via `/v1/models` using gateway-prefixed IDs: `anthropic/provider_type/model_name` (thinking enabled) and `claude-3-freecc-no-thinking/provider_type/model_name` (thinking disabled). These prefixes make Claude Code recognize and display the models in its `/model` selector. The `ModelRouter` decodes them back to `provider_type/model_name` for routing.
+- **Thinking override**: `ENABLE_MODEL_N_THINKING=true/false` per model. Inherits `ENABLE_MODEL_THINKING` if not set.
+- **Discovery**: `Settings.discover_custom_models()` scans both `os.environ` and `.env` files for `MODEL_\d+` patterns. Validates provider prefix, orders by index.
+- **Fallback**: When no `MODEL_N` vars are set, the default `MODEL` is used as the sole model. Standard Claude model IDs (e.g. `claude-opus-4-20250514`) also fall back to the default model.
+- **Removed**: `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU`, `ENABLE_OPUS_THINKING`, `ENABLE_SONNET_THINKING`, `ENABLE_HAIKU_THINKING` — these are now errors. Use `MODEL_N` and `ENABLE_MODEL_N_THINKING` instead.
+- **Display labels**: `provider_display()` in `config/settings.py` converts `provider_type/model_name` to human-readable labels (e.g. "Ollama › glm-5.1:cloud").
 - Do not add `# type: ignore` or `# ty: ignore`; fix the underlying type issue.
 - All 5 checks are enforced in `tests.yml` on push/merge.
 
@@ -85,7 +96,7 @@
 - **Always rebuild after editing UI source**: run `cd ui && npx vite build` on the deployment machine (Pi). PM2's `fcc-ui` process runs `vite build --watch` for auto-rebuild on that machine.
 - **Auth**: Stateless HMAC-SHA256 tokens (`_TOKEN_SUFFIX = ":fcc-ui"`), no server-side session storage.
 - **Database**: SQLite via `api/ui_db.py` — sessions, messages, history.
-- **Model selector**: Fixed 3-tier (Opus/Sonnet/Haiku) with resolved provider display labels.
+- **Model selector**: Dynamic, built from `MODEL_N` env vars. Each `MODEL_N` (e.g. `MODEL_1=ollama/glm-5.1:cloud`) defines a model entry. Provider display labels are auto-generated from the `provider/model` format (e.g. "Ollama › glm-5.1:cloud"). When no custom models are configured, the default `MODEL` is used as the sole option.
 - **Streaming chat flow** (`api/ui_routes.py` → `ui/src/App.tsx`):
   1. Backend saves user message and **sets session title** (first turn only, `if not history`) _before_ the stream starts — no race.
   2. Frontend updates session title **optimistically in local state** the moment the user sends (no waiting for network).

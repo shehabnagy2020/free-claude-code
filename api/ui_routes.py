@@ -10,9 +10,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from starlette.background import BackgroundTask
 from loguru import logger
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from config.settings import get_settings
 
@@ -20,10 +20,9 @@ from .dependencies import resolve_provider
 from .models.anthropic import Message, MessagesRequest
 from .services import ClaudeProxyService
 from .summary import generate_summary
-from .web_tools.tavily import tavily_fetch as _tavily_fetch
-from .web_tools.tavily import tavily_search as _tavily_search
-from .web_tools.public_api_router import process_message_for_public_api
 from .ui_db import UIChatDB
+from .web_tools.public_api_router import process_message_for_public_api
+from .web_tools.tavily import tavily_search as _tavily_search
 
 ui_router = APIRouter(prefix="/ui/api")
 
@@ -133,7 +132,6 @@ _REALTIME_KEYWORDS: frozenset[str] = frozenset(
         # Search intent
         "search",
         "find",
-        "look up",
         "look up",
         "who is",
         "what is",
@@ -376,53 +374,35 @@ async def logout(request: Request) -> dict[str, bool]:
 # ── Config ────────────────────────────────────────────────────────────────────
 
 
-# The three tiers always shown in the model selector, regardless of .env.
-# The proxy's own resolve_model() maps each Claude ID to the right provider.
-_MODEL_TIERS: list[dict[str, str]] = [
-    {"label": "Claude Opus", "claude_id": "claude-opus-4-20250514", "tier": "opus"},
-    {
-        "label": "Claude Sonnet",
-        "claude_id": "claude-3-5-sonnet-20241022",
-        "tier": "sonnet",
-    },
-    {"label": "Claude Haiku", "claude_id": "claude-3-haiku-20240307", "tier": "haiku"},
-]
-
-
-def _provider_display(model_str: str) -> str:
-    """Convert 'provider_type/model/name' → human-readable provider label."""
-    if not model_str:
-        return ""
-    parts = model_str.split("/", 1)
-    provider_id = parts[0]
-    model_name = parts[1] if len(parts) > 1 else ""
-    provider_label = provider_id.replace("_", " ").title()
-    return f"{provider_label} › {model_name}" if model_name else provider_label
-
-
 @ui_router.get("/config")
 async def get_config(_: Token) -> dict[str, Any]:
-    """Return the fixed three-tier model selector with resolved provider labels."""
+    """Return the model selector with gateway-prefixed model IDs."""
+    from config.settings import provider_display
+
+    from .gateway_model_ids import gateway_model_id
+
     settings = get_settings()
-
-    # Mark the tier that matches settings.model as default.
-    default_tier = "opus"
-    if settings.model:
-        m = settings.model.lower()
-        if "haiku" in m:
-            default_tier = "haiku"
-        elif "sonnet" in m:
-            default_tier = "sonnet"
-
     models: list[dict[str, Any]] = []
-    for tier in _MODEL_TIERS:
-        resolved = settings.resolve_model(tier["claude_id"])
+
+    if settings.custom_models:
+        for i, entry in enumerate(settings.custom_models.values()):
+            model_id = gateway_model_id(entry.model_ref)
+            models.append(
+                {
+                    "label": provider_display(entry.model_ref),
+                    "claude_model": model_id,
+                    "provider_display": provider_display(entry.model_ref),
+                    "is_default": i == 0,
+                }
+            )
+    else:
+        model_id = gateway_model_id(settings.model)
         models.append(
             {
-                "label": tier["label"],
-                "claude_model": tier["claude_id"],
-                "provider_display": _provider_display(resolved),
-                "is_default": tier["tier"] == default_tier,
+                "label": provider_display(settings.model),
+                "claude_model": model_id,
+                "provider_display": provider_display(settings.model),
+                "is_default": True,
             }
         )
 

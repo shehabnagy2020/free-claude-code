@@ -14,9 +14,7 @@ from smoke.lib.config import (
 def _settings(**overrides):
     values = {
         "model": "ollama/llama3.1",
-        "model_opus": None,
-        "model_sonnet": None,
-        "model_haiku": None,
+        "custom_models": {},
         "nvidia_nim_api_key": "",
         "open_router_api_key": "",
         "deepseek_api_key": "",
