@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS messages (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _session_to_dict(row: aiosqlite.Row, message_count: int = 0) -> dict[str, Any]:
@@ -147,7 +147,7 @@ class UIChatDB:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             await db.execute(
-                f"UPDATE sessions SET {', '.join(parts)} WHERE id = ?",  # noqa: S608
+                f"UPDATE sessions SET {', '.join(parts)} WHERE id = ?",
                 values,
             )
             await db.commit()
@@ -168,11 +168,10 @@ class UIChatDB:
         return (cursor.rowcount or 0) > 0
 
     async def session_exists(self, session_id: str) -> bool:
-        async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
-            ) as cursor:
-                return (await cursor.fetchone()) is not None
+        async with aiosqlite.connect(self._db_path) as db, db.execute(
+            "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
+        ) as cursor:
+            return (await cursor.fetchone()) is not None
 
     async def get_history_for_chat(
         self, session_id: str
@@ -200,11 +199,10 @@ class UIChatDB:
 
     async def get_session_title(self, session_id: str) -> str | None:
         """Return the session title, or None if not found."""
-        async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                "SELECT title FROM sessions WHERE id = ?", (session_id,)
-            ) as cursor:
-                row = await cursor.fetchone()
+        async with aiosqlite.connect(self._db_path) as db, db.execute(
+            "SELECT title FROM sessions WHERE id = ?", (session_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
         return row[0] if row else None
 
     # ── Messages ──────────────────────────────────────────────────────────────
@@ -246,11 +244,10 @@ class UIChatDB:
 
     async def get_summary(self, session_id: str) -> str | None:
         """Return the session summary, or None if not found."""
-        async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                "SELECT summary FROM sessions WHERE id = ?", (session_id,)
-            ) as cursor:
-                row = await cursor.fetchone()
+        async with aiosqlite.connect(self._db_path) as db, db.execute(
+            "SELECT summary FROM sessions WHERE id = ?", (session_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
         return row[0] if row else None
 
     async def update_summary(self, session_id: str, summary: str) -> None:

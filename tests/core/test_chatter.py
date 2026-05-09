@@ -1,7 +1,6 @@
 """Unit tests for ChatterStripper in core/chatter.py."""
 
-import pytest
-from core.chatter import ChatterStripper, _strip_opening_chatter, _is_filler_sentence
+from core.chatter import ChatterStripper, _is_filler_sentence, _strip_opening_chatter
 
 
 class TestChatterStripper:

@@ -5,16 +5,13 @@ import tomllib
 from pathlib import Path
 
 
-def test_architecture_plan_exists() -> None:
+def test_agents_md_exists() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    plan = repo_root / "PLAN.md"
+    agents_md = repo_root / "AGENTS.md"
 
-    assert plan.exists()
-    text = plan.read_text(encoding="utf-8")
-    assert "Intended Dependency Direction" in text
-    assert "Smoke Coverage Policy" in text
-    assert "providers.nvidia_nim.voice" in text
-    assert "no dedicated smoke SSE shim" in text
+    assert agents_md.exists()
+    text = agents_md.read_text(encoding="utf-8")
+    assert "ARCHITECTURE PRINCIPLES" in text
 
 
 def test_smoke_lib_has_no_sse_shim_module() -> None:

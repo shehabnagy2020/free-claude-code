@@ -1,8 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from providers.google_gemini import GoogleGeminiProvider
+import pytest
+
 from config.provider_catalog import GOOGLE_GEMINI_DEFAULT_BASE
+from providers.google_gemini import GoogleGeminiProvider
 
 
 @pytest.fixture(autouse=True)

@@ -6,7 +6,6 @@ Used by :class:`OpenRouterProvider` and line-mode
 
 from __future__ import annotations
 
-import copy
 import json
 from dataclasses import dataclass, field
 from typing import Any

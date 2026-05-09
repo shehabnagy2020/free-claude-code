@@ -6,7 +6,7 @@
 
 - Install astral uv using "curl -LsSf https://astral.sh/uv/install.sh | sh" if not already installed and if already installed then update it to the latest version
 - Install Python 3.14 using `uv python install 3.14` if not already installed
-- Run `npm install` at project root to install Node.js dependencies (context-mode sidecar).
+- Run `uv run` to run files instead of the global `python` command.
 - Always use `uv run` to run files instead of the global `python` command.
 - Current uv ruff formatter is set to py314 which has supports multiple exception types without paranthesis (except TypeError, ValueError:)
 - Read `.env.example` for environment variables.
@@ -26,17 +26,6 @@
 - **Display labels**: `provider_display()` in `config/settings.py` converts `provider_type/model_name` to human-readable labels (e.g. "Ollama › glm-5.1:cloud").
 - Do not add `# type: ignore` or `# ty: ignore`; fix the underlying type issue.
 - All 5 checks are enforced in `tests.yml` on push/merge.
-
-## CONTEXT-MODE SIDECAR
-
-- The proxy launches `context-mode` (MCP server) for sandboxed code execution when `ENABLE_CONTEXT_MODE=true`.
-- A ~35-token nudge is injected into requests, routing tool usage to sandboxed functions:
-  - `ctx_execute()` / `ctx_execute_file()` for data/file analysis
-  - `ctx_fetch_and_index()` then `ctx_search()` for web requests
-  - `ctx_batch_execute()` for complex shell operations
-- Direct bash is limited to: `git`, `mkdir`, `rm`, `mv`, `cd`, `ls`, `npm`, `pip`.
-- The nudge uses imperative rules without section headers to avoid model mimicry.
-- Health monitoring auto-restarts the sidecar on crash (30s interval).
 
 ## IDENTITY & CONTEXT
 
@@ -123,17 +112,6 @@
 - **System prompt injection**: Global memory is **always** injected into the system prompt on every turn. On follow-up turns, session summary is also included. This ensures facts persist across all sessions immediately.
 - **Background summary** (`api/summary.py`): After each chat turn, a summary is generated and `REMEMBER:`/`KEEP:`/`NOTE:`/`DON'T FORGET:`/`SAVE:` tagged items are extracted to global memory as a secondary path. The summary also prepends current global memory so it stays embedded in session context.
 - **Dedup**: `_extract_memory_from_text` filters filler words ("that", "this", "it") and deduplicates overlapping captures (e.g. "save my phone number" vs "my phone number" — keeps shorter).
-
-## CONTEXT-MODE INTEGRATION
-
-- **Sidecar process**: `api/runtime.py` launches `npx -y context-mode` as a subprocess on `AppRuntime.startup()` when `enable_context_mode=True`. Kills on `shutdown()` + `atexit` safety net. Log: `Context-mode sidecar started (pid=...)`.
-- **System prompt nudge**: `core/nudge.py` contains a ~115-token sandbox routing nudge. **NOT injected server-side** — client handles this via CLAUDE.md on the deployment machine.
-- **Output chatter stripping**: `core/chatter.py` provides `ChatterStripper` — a sentence-based filter that strips local-model filler prefixes ("Certainly! I can help with that.", "Of course! Let me assist...", etc.) from the first text block of responses. Applied inside `providers/openai_compat.py` (OpenAI Chat transport) only. The Anthropic Messages transport does not use chatter stripping — those providers tend to produce cleaner output. Colon-aware splitting preserves content after colons. Log: `CHATTER_STRIP: removed N chars from '...' → '...'`.
-- **Chatter is per-transport**: Chatter stripping lives in the OpenAI-compat transport (`openai_compat.py`), not at the services layer.
-- **package.json**: Root-level `package.json` declares `context-mode` as an npm dependency. Run `npm install` before starting the proxy.
-- **ENABLE_CONTEXT_MODE setting**: `config/settings.py` has `enable_context_mode` (default: `False`) to gate sidecar launch. Add `ENABLE_CONTEXT_MODE=true` to `.env` to enable.
-- **Nudge + Tavily coexistence**: When client-side nudge is configured, it clarifies that the proxy's `web_search`/`web_fetch` tools (Tavily-handled) are fine to use — only raw `WebFetch` (which dumps HTML into context) is blocked.
-- **Pipeline order**: REQUEST → ROUTED → WEB_TOOLS → OPTIMIZATION → STRIP_SERVER_TOOLS → INJECT_WEB_SEARCH → FORWARD → STREAM (chatter stripping applied in OpenAI transport only).
 
 ## IMAGE SUPPORT
 

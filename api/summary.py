@@ -8,12 +8,11 @@ from typing import Any
 
 from loguru import logger
 
-from config.settings import Settings, get_settings
+from config.settings import Settings
 
-from .models.anthropic import MessagesRequest, Message
+from .models.anthropic import Message, MessagesRequest
 from .services import ClaudeProxyService
 from .ui_db import UIChatDB
-from .dependencies import resolve_provider
 
 SUMMARY_SYSTEM_PROMPT = """\
 You are a conversation summarizer. Produce a concise running summary of a chat conversation.

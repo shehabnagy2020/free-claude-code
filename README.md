@@ -53,31 +53,7 @@ uv self update
 uv python install 3.14
 ```
 
-### 2. Install Node.js Dependencies (required for context-mode)
-
-The proxy can launch a `context-mode` sidecar for sandboxed code execution and efficient tool routing.
-Requires Node.js 18+ and npm.
-
-```bash
-npm install
-```
-
-Enable in `.env`:
-```dotenv
-ENABLE_CONTEXT_MODE=true
-```
-
-When enabled, the proxy logs:
-- `Context-mode sidecar: STARTING (npx -y context-mode)...` on startup
-- `Context-mode sidecar: STARTED (pid=...)` when running
-- `Context-mode sidecar: STOPPED` on shutdown
-
-The sidecar injects a ~35-token nudge into requests that routes tool usage to sandboxed functions:
-- `ctx_execute()` for data/file analysis
-- `ctx_fetch_and_index()` for web requests
-- `ctx_batch_execute()` for complex shell operations
-
-### 3. Clone And Configure
+### 2. Clone And Configure
 
 ```bash
 git clone https://github.com/Alishahryar1/free-claude-code.git
@@ -593,7 +569,6 @@ Run them in that order before pushing. CI enforces the same checks.
 
 - Report bugs and feature requests in [Issues](https://github.com/Alishahryar1/free-claude-code/issues).
 - Keep changes small and covered by focused tests.
-- Do not open Docker integration PRs.
 - Do not open README change PRs just open an issue for it.
 - Run the full check sequence before opening a pull request.
 - The syntax Except X, Y is brought back in python 3.14 final version (not in 3.14 alpha). Keep in mind before opening PRs.
