@@ -182,8 +182,14 @@ def _strip_opening_chatter(text: str) -> str:
     parts = _SENTENCE_SPLIT.split(text, maxsplit=10)
     if len(parts) <= 1:
         # Single sentence — strip the whole thing if it's pure filler,
-        # or keep it if it has substantial content.
+        # or keep it if it has substantial content beyond the chatter keyword.
         if _is_filler_sentence(text):
+            if _has_content_beyond_filler(text):
+                # Strip just the chatter prefix, keep the content.
+                after = _strip_chatter_prefix(text)
+                if after:
+                    _log_chatter_stripped(text, after)
+                    return after
             _log_chatter_stripped(text, "")
             return ""
         return text
@@ -208,6 +214,25 @@ def _strip_opening_chatter(text: str) -> str:
                 while colon_pos < len(text) and text[colon_pos] == " ":
                     colon_pos += 1
                 return text[colon_pos:]
+
+            # If this filler-classified sentence has substantive content
+            # beyond a short filler phrase, stop stripping — keep it.
+            # E.g. "I can help with that." carries real meaning even though
+            # it starts with a chatter keyword.
+            if _has_content_beyond_filler(stripped):
+                if cut > 0:
+                    # We've already stripped prior filler; keep this sentence intact.
+                    _log_chatter_stripped(text, text[cut:])
+                    return text[cut:]
+                # First sentence: strip just the chatter prefix, keep the content.
+                after = _strip_chatter_prefix(stripped)
+                if after:
+                    prefix_len = len(stripped) - len(after)
+                    offset = _sentence_start(text, i, sentences)
+                    result = text[offset + prefix_len:]
+                    _log_chatter_stripped(text, result)
+                    return result
+                return text
             cut = _sentence_end(text, i, sentences)
             continue
         break
@@ -271,6 +296,39 @@ def _split_at_colon(sentence: str) -> str | None:
     if len(after.split()) <= 5 and any(c.isalpha() for c in after):
         return after
     return None
+
+
+def _strip_chatter_prefix(sentence: str) -> str | None:
+    """Strip a known chatter keyword prefix from *sentence*, returning the rest.
+
+    Returns None if no chatter prefix is found or if the remaining content
+    after the prefix is empty.
+    """
+    m = _CHATTER_PREFIX_RE.match(sentence)
+    if not m:
+        return None
+    # Find the boundary after the chatter keyword: punctuation + optional space.
+    rest = sentence[m.end():]
+    # Strip trailing punctuation and whitespace after the keyword.
+    rest = rest.lstrip("!.,;:? ")
+    if not rest:
+        return None
+    return rest
+
+
+def _has_content_beyond_filler(sentence: str) -> bool:
+    """True if a filler-classified sentence has substantive content beyond the filler phrase.
+
+    Catches cases like "I can help with that." where the whole sentence is
+    classified as filler but actually carries useful information.
+    """
+    # Strip the chatter keyword prefix to see what remains.
+    after = _strip_chatter_prefix(sentence)
+    if after is None:
+        return False
+    # If what remains has any meaningful words, the sentence carries real content.
+    words = after.split()
+    return len(words) >= 2
 
 
 def _is_filler_sentence(sentence: str) -> bool:

@@ -149,6 +149,9 @@ async def test_non_429_http_error_not_retried(provider_config):
 
             instance.execute_with_retry = AsyncMock(side_effect=_passthrough)
             instance.concurrency_slot.side_effect = _slot
+            # Ensure _is_retryable_network_error uses the real implementation
+            # so HTTPStatusError (500) is NOT retried.
+            mock_gl._is_retryable_network_error = GlobalRateLimiter._is_retryable_network_error
 
             provider = NativeProvider(provider_config)
             req = MockRequest()

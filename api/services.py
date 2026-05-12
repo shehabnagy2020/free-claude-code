@@ -83,8 +83,15 @@ def anthropic_sse_streaming_response(
     )
 
 
-def _http_status_for_unexpected_service_exception(_exc: BaseException) -> int:
+def _http_status_for_unexpected_service_exception(exc: BaseException) -> int:
     """HTTP status for uncaught non-provider failures (stable client contract)."""
+    import openai
+    if isinstance(exc, openai.RateLimitError):
+        return 429
+    if isinstance(exc, (openai.BadRequestError, InvalidRequestError)):
+        return 400
+    if isinstance(exc, openai.AuthenticationError):
+        return 401
     return 500
 
 

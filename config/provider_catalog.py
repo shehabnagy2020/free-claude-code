@@ -81,12 +81,12 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "llamacpp": ProviderDescriptor(
         provider_id="llamacpp",
-        transport_type="anthropic_messages",
+        transport_type="openai_chat",
         static_credential="llamacpp",
         default_base_url=LLAMACPP_DEFAULT_BASE,
         base_url_attr="llamacpp_base_url",
         proxy_attr="llamacpp_proxy",
-        capabilities=("chat", "streaming", "tools", "native_anthropic", "local"),
+        capabilities=("chat", "streaming", "tools", "thinking", "local"),
     ),
     "ollama": ProviderDescriptor(
         provider_id="ollama",
@@ -111,7 +111,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="google_gemini_api_key",
         default_base_url=GOOGLE_GEMINI_DEFAULT_BASE,
         proxy_attr="google_gemini_proxy",
-        capabilities=("chat", "streaming", "tools", "thinking"),
+        capabilities=("chat", "streaming", "tools", "thinking", "rate_limit"),
     ),
 }
 

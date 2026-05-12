@@ -52,6 +52,16 @@ def _tool_input_schema(tool: Any) -> dict[str, Any]:
     return {"type": "object", "properties": {}}
 
 
+def _convert_document_to_text(block: dict) -> str:
+    """Convert a ``document`` content block to a short text description."""
+    source = block.get("source", {})
+    media_type = source.get("media_type", "application/octet-stream") if isinstance(source, dict) else "application/octet-stream"
+    title = block.get("title") or block.get("name") or ""
+    if title:
+        return f"[Document: {title} ({media_type})]"
+    return f"[Document: {media_type}]"
+
+
 def _serialize_tool_result_content(tool_content: Any) -> str:
     """Serialize tool_result content for OpenAI ``role: tool`` messages (stable JSON for structured values)."""
     if tool_content is None:
@@ -59,12 +69,16 @@ def _serialize_tool_result_content(tool_content: Any) -> str:
     if isinstance(tool_content, str):
         return tool_content
     if isinstance(tool_content, dict):
+        if tool_content.get("type") == "document":
+            return _convert_document_to_text(tool_content)
         return json.dumps(tool_content, ensure_ascii=False)
     if isinstance(tool_content, list):
         parts: list[str] = []
         for item in tool_content:
             if isinstance(item, dict) and item.get("type") == "text":
                 parts.append(str(item.get("text", "")))
+            elif isinstance(item, dict) and item.get("type") == "document":
+                parts.append(_convert_document_to_text(item))
             elif isinstance(item, dict):
                 parts.append(json.dumps(item, ensure_ascii=False))
             else:
@@ -99,6 +113,8 @@ class _PendingAfterTools:
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS
     # True after deferred assistant text has been added to the OpenAI transcript.
     deferred_emitted: bool = False
+    # Map of tool_use_id to tool_name, required for some OpenAI-compatible providers (Gemini).
+    tool_id_to_name: dict[str, str] = field(default_factory=dict)
 
     def needs_deferred(self) -> bool:
         return bool(self.deferred_blocks) and not self.deferred_emitted
@@ -169,6 +185,7 @@ class AnthropicToOpenAIConverter:
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         pending: _PendingAfterTools | None = None
+        tool_id_to_name: dict[str, str] = {}
 
         for msg in messages:
             role = msg.role
@@ -183,6 +200,7 @@ class AnthropicToOpenAIConverter:
                     result.extend(
                         AnthropicToOpenAIConverter._deferred_post_tool_to_messages(
                             pending,
+                            tool_id_to_name=tool_id_to_name,
                         )
                     )
                     pending.deferred_emitted = True
@@ -199,6 +217,7 @@ class AnthropicToOpenAIConverter:
                             first_tool_index=first_i,
                             reasoning_content=reasoning_content,
                             reasoning_replay=reasoning_replay,
+                            tool_id_to_name=tool_id_to_name,
                         )
                     )
                     result.extend(out)
@@ -212,13 +231,15 @@ class AnthropicToOpenAIConverter:
                             content,
                             reasoning_content=reasoning_content,
                             reasoning_replay=reasoning_replay,
+                            tool_id_to_name=tool_id_to_name,
                         )
                     )
             elif isinstance(content, str):
                 if role == "user" and pending is not None and pending.needs_deferred():
                     result.extend(
                         AnthropicToOpenAIConverter._deferred_post_tool_to_messages(
-                            pending
+                            pending,
+                            tool_id_to_name=tool_id_to_name,
                         )
                     )
                     pending.deferred_emitted = True
@@ -239,32 +260,40 @@ class AnthropicToOpenAIConverter:
                         if not pending.remaining_tool_ids:
                             result.extend(
                                 AnthropicToOpenAIConverter._deferred_post_tool_to_messages(
-                                    pending
+                                    pending,
+                                    tool_id_to_name=tool_id_to_name,
                                 )
                             )
                             pending.deferred_emitted = True
                             pending = None
                             result.extend(
                                 AnthropicToOpenAIConverter._convert_user_message(
-                                    content
+                                    content,
+                                    tool_id_to_name=tool_id_to_name,
                                 )
                             )
                         else:
                             pieces = AnthropicToOpenAIConverter._convert_user_message_with_injection(
-                                content, pending
+                                content,
+                                pending,
+                                tool_id_to_name=tool_id_to_name,
                             )
                             result.extend(pieces["messages"])
                             if pieces["cleared_pending"]:
                                 pending = None
                     else:
                         result.extend(
-                            AnthropicToOpenAIConverter._convert_user_message(content)
+                            AnthropicToOpenAIConverter._convert_user_message(
+                                content,
+                                tool_id_to_name=tool_id_to_name,
+                            )
                         )
             else:
                 if role == "user" and pending is not None and pending.needs_deferred():
                     result.extend(
                         AnthropicToOpenAIConverter._deferred_post_tool_to_messages(
-                            pending
+                            pending,
+                            tool_id_to_name=tool_id_to_name,
                         )
                     )
                     pending.deferred_emitted = True
@@ -273,7 +302,10 @@ class AnthropicToOpenAIConverter:
 
         if pending is not None and pending.needs_deferred():
             result.extend(
-                AnthropicToOpenAIConverter._deferred_post_tool_to_messages(pending)
+                AnthropicToOpenAIConverter._deferred_post_tool_to_messages(
+                    pending,
+                    tool_id_to_name=tool_id_to_name,
+                )
             )
 
         return result
@@ -285,6 +317,7 @@ class AnthropicToOpenAIConverter:
         first_tool_index: int,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
+        tool_id_to_name: dict[str, str] | None = None,
     ) -> tuple[list[dict[str, Any]], _PendingAfterTools | None]:
         pre = content[:first_tool_index]
         tool_calls = _iter_tool_uses_in_order(content)
@@ -294,9 +327,20 @@ class AnthropicToOpenAIConverter:
                     content,
                     reasoning_content=reasoning_content,
                     reasoning_replay=reasoning_replay,
+                    tool_id_to_name=tool_id_to_name,
                 ),
                 None,
             )
+        
+        # Populate tool_id_to_name map
+        if tool_id_to_name is not None:
+            for tc in tool_calls:
+                tid = tc.get("id")
+                fn = tc.get("function", {})
+                tname = fn.get("name")
+                if tid and tname:
+                    tool_id_to_name[str(tid)] = str(tname)
+
         deferred_blocks = _deferred_post_tool_blocks(
             content, first_tool_index=first_tool_index
         )
@@ -316,6 +360,7 @@ class AnthropicToOpenAIConverter:
                 pre,
                 reasoning_content=reasoning_content,
                 reasoning_replay=reasoning_replay,
+                tool_id_to_name=tool_id_to_name,
             )[0]
         pre_msg["tool_calls"] = tool_calls
         if tool_calls and pre_msg.get("content") == " ":
@@ -341,6 +386,7 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_content: str | None = None,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        tool_id_to_name: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         content_parts: list[str] = []
         thinking_parts: list[str] = []
@@ -362,13 +408,17 @@ class AnthropicToOpenAIConverter:
                 # or reasoning_content for OpenAI chat upstreams.
                 continue
             elif block_type == "tool_use":
+                tid = get_block_attr(block, "id")
+                tname = get_block_attr(block, "name")
+                if tool_id_to_name is not None and tid and tname:
+                    tool_id_to_name[str(tid)] = str(tname)
                 tool_input = get_block_attr(block, "input", {})
                 tool_calls.append(
                     {
-                        "id": get_block_attr(block, "id"),
+                        "id": tid,
                         "type": "function",
                         "function": {
-                            "name": get_block_attr(block, "name"),
+                            "name": tname,
                             "arguments": json.dumps(tool_input)
                             if isinstance(tool_input, dict)
                             else str(tool_input),
@@ -398,6 +448,7 @@ class AnthropicToOpenAIConverter:
     @staticmethod
     def _deferred_post_tool_to_messages(
         pending: _PendingAfterTools,
+        tool_id_to_name: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         if not pending.deferred_blocks:
             return []
@@ -405,16 +456,21 @@ class AnthropicToOpenAIConverter:
             pending.deferred_blocks,
             reasoning_content=pending.top_level_reasoning,
             reasoning_replay=pending.reasoning_replay,
+            tool_id_to_name=tool_id_to_name,
         )
 
     @staticmethod
     def _convert_user_message_with_injection(
-        content: list[Any], pending: _PendingAfterTools
+        content: list[Any],
+        pending: _PendingAfterTools,
+        tool_id_to_name: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Convert user list blocks, emitting deferred assistant after all tool results."""
         if not pending.needs_deferred() or not pending.remaining_tool_ids:
             return {
-                "messages": AnthropicToOpenAIConverter._convert_user_message(content),
+                "messages": AnthropicToOpenAIConverter._convert_user_message(
+                    content, tool_id_to_name=tool_id_to_name
+                ),
                 "cleared_pending": False,
             }
 
@@ -432,6 +488,7 @@ class AnthropicToOpenAIConverter:
             if block_type == "text":
                 text_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "image":
+                # ... rest of image handling ...
                 flush_text()
                 # Convert Anthropic image to OpenAI image_url format
                 source = get_block_attr(block, "source", {})
@@ -479,23 +536,33 @@ class AnthropicToOpenAIConverter:
                 serialized = _serialize_tool_result_content(tool_content)
                 tuid = get_block_attr(block, "tool_use_id")
                 tuid_s = str(tuid) if tuid is not None else ""
-                result.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tuid,
-                        "content": serialized if serialized else "",
-                    }
-                )
+                msg: dict[str, Any] = {
+                    "role": "tool",
+                    "tool_call_id": tuid,
+                    "content": serialized if serialized else "",
+                }
+                if tool_id_to_name and tuid_s in tool_id_to_name:
+                    msg["name"] = tool_id_to_name[tuid_s]
+                result.append(msg)
                 if tuid_s in pending.remaining_tool_ids:
                     pending.remaining_tool_ids.discard(tuid_s)
                 if not pending.remaining_tool_ids:
                     result.extend(
                         AnthropicToOpenAIConverter._deferred_post_tool_to_messages(
-                            pending
+                            pending,
+                            tool_id_to_name=tool_id_to_name,
                         )
                     )
                     pending.deferred_emitted = True
                     cleared = True
+            elif block_type == "document":
+                source = get_block_attr(block, "source", {})
+                media_type = source.get("media_type", "application/octet-stream") if isinstance(source, dict) else "application/octet-stream"
+                title = get_block_attr(block, "title") or get_block_attr(block, "name") or ""
+                if title:
+                    text_parts.append(f"[Document: {title} ({media_type})]")
+                else:
+                    text_parts.append(f"[Document: {media_type}]")
             else:
                 pass
 
@@ -503,7 +570,10 @@ class AnthropicToOpenAIConverter:
         return {"messages": result, "cleared_pending": cleared}
 
     @staticmethod
-    def _convert_user_message(content: list[Any]) -> list[dict[str, Any]]:
+    def _convert_user_message(
+        content: list[Any],
+        tool_id_to_name: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         text_parts: list[str] = []
 
@@ -518,6 +588,7 @@ class AnthropicToOpenAIConverter:
             if block_type == "text":
                 text_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "image":
+                # ... rest of image handling ...
                 flush_text()
                 # Convert Anthropic image to OpenAI image_url format
                 source = get_block_attr(block, "source", {})
@@ -563,13 +634,26 @@ class AnthropicToOpenAIConverter:
                 flush_text()
                 tool_content = get_block_attr(block, "content", "")
                 serialized = _serialize_tool_result_content(tool_content)
-                result.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": get_block_attr(block, "tool_use_id"),
-                        "content": serialized if serialized else "",
-                    }
-                )
+                tuid = get_block_attr(block, "tool_use_id")
+                tuid_s = str(tuid) if tuid is not None else ""
+                msg: dict[str, Any] = {
+                    "role": "tool",
+                    "tool_call_id": tuid,
+                    "content": serialized if serialized else "",
+                }
+                if tool_id_to_name and tuid_s in tool_id_to_name:
+                    msg["name"] = tool_id_to_name[tuid_s]
+                result.append(msg)
+            elif block_type == "document":
+                # Document blocks (PDFs, etc.) are not supported by OpenAI-compatible
+                # providers — convert to a text description so context is preserved.
+                source = get_block_attr(block, "source", {})
+                media_type = source.get("media_type", "application/octet-stream") if isinstance(source, dict) else "application/octet-stream"
+                title = get_block_attr(block, "title") or get_block_attr(block, "name") or ""
+                if title:
+                    text_parts.append(f"[Document: {title} ({media_type})]")
+                else:
+                    text_parts.append(f"[Document: {media_type}]")
 
         flush_text()
         return result

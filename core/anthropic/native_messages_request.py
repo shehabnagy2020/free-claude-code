@@ -170,6 +170,100 @@ def sanitize_native_messages_thinking_policy(
     return sanitized_messages
 
 
+_UNSUPPORTED_TOP_LEVEL_BLOCK_TYPES = frozenset({"document"})
+
+
+def _convert_document_block(block: dict) -> dict:
+    """Convert a ``document`` content block to a text description.
+
+    Third-party Anthropic-compatible endpoints (Ollama, llama.cpp, LM Studio)
+    do not support the ``document`` block type.  We preserve the information by
+    converting it to a ``text`` block with a descriptive summary so the model
+    still knows a document was present.
+    """
+    source = block.get("source", {})
+    media_type = source.get("media_type", "application/octet-stream")
+    # Base64 data is too large to include as text; provide metadata only.
+    desc = f"[Document: {media_type}]"
+    title = block.get("title") or block.get("name")
+    if title:
+        desc = f"[Document: {title} ({media_type})]"
+    return {"type": "text", "text": desc}
+
+
+def sanitize_native_messages_unsupported_blocks(messages: Any) -> Any:
+    """Convert content block types not supported by upstream providers.
+
+    Third-party Anthropic-compatible endpoints (Ollama, llama.cpp, LM Studio)
+    do not support ``document`` blocks.  This function converts them to text
+    descriptions so the model still knows a document was referenced, avoiding
+    422 validation errors while preserving conversation context.
+    """
+    if not isinstance(messages, list):
+        return messages
+
+    changed = False
+    sanitized_messages: list[Any] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            sanitized_messages.append(message)
+            continue
+
+        content = message.get("content")
+        if not isinstance(content, list):
+            sanitized_messages.append(message)
+            continue
+
+        new_content: list[Any] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in _UNSUPPORTED_TOP_LEVEL_BLOCK_TYPES:
+                changed = True
+                new_content.append(_convert_document_block(block))
+            else:
+                new_content.append(block)
+
+        # Also convert unsupported blocks nested inside tool_result content arrays
+        for i, block in enumerate(new_content):
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_result"
+                and isinstance(block.get("content"), list)
+            ):
+                nested: list[Any] = []
+                nested_changed = False
+                for sub in block["content"]:
+                    if isinstance(sub, dict) and sub.get("type") in _UNSUPPORTED_TOP_LEVEL_BLOCK_TYPES:
+                        nested.append(_convert_document_block(sub))
+                        nested_changed = True
+                    else:
+                        nested.append(sub)
+                if nested_changed:
+                    new_content[i] = dict(block, content=nested if nested else "")
+
+        if changed:
+            sanitized_message = dict(message)
+            sanitized_message["content"] = new_content if new_content else ""
+            sanitized_messages.append(sanitized_message)
+        else:
+            sanitized_messages.append(message)
+
+    if changed:
+        from loguru import logger
+
+        logger.info(
+            "CONVERTED unsupported document blocks to text in {} message(s)",
+            sum(
+                1
+                for m in sanitized_messages
+                if isinstance(m, dict)
+                and m is not messages
+                and m not in messages
+            ),
+        )
+
+    return sanitized_messages
+
+
 def _normalize_system_prompt_for_openrouter(system: Any) -> Any:
     """Flatten Claude SDK system blocks for OpenRouter's native endpoint."""
     if not isinstance(system, list):
@@ -224,6 +318,9 @@ def build_base_native_anthropic_request_body(
         body["messages"] = sanitize_native_messages_thinking_policy(
             body["messages"],
             thinking_enabled=thinking_enabled,
+        )
+        body["messages"] = sanitize_native_messages_unsupported_blocks(
+            body["messages"],
         )
 
     return body

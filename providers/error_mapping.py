@@ -51,10 +51,18 @@ def map_error(
     message = get_user_facing_error_message(e)
     limiter = rate_limiter or GlobalRateLimiter.get_instance()
 
+    def _extract_retry_after(err_str: str) -> float:
+        """Try to find 'retry in Xs' or 'after Xs' in error message."""
+        import re
+        match = re.search(r"retry (?:in|after) ([\d\.]+)s", err_str.lower())
+        if match:
+            return float(match.group(1))
+        return 60.0
+
     if isinstance(e, openai.AuthenticationError):
         return AuthenticationError(message, raw_error=str(e))
     if isinstance(e, openai.RateLimitError):
-        limiter.set_blocked(60)
+        limiter.set_blocked(_extract_retry_after(str(e)))
         return RateLimitError(message, raw_error=str(e))
     if isinstance(e, openai.BadRequestError):
         return InvalidRequestError(message, raw_error=str(e))
@@ -86,7 +94,7 @@ def map_error(
         if status in (401, 403):
             return AuthenticationError(message, raw_error=error_body)
         if status == 429:
-            limiter.set_blocked(60)
+            limiter.set_blocked(_extract_retry_after(error_body))
             return RateLimitError(message, raw_error=error_body)
         if status == 400:
             return InvalidRequestError(message, raw_error=error_body)

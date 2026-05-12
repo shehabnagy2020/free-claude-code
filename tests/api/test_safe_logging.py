@@ -72,7 +72,8 @@ def test_sse_builder_default_debug_has_no_serialized_json_content():
 
     assert mock_debug.call_count == 1
     message = str(mock_debug.call_args)
-    assert "serialized_bytes=" in message
+    assert "event_type" in message
+    assert "chars=" in message
     assert "role" not in message
     assert "assistant" not in message
 

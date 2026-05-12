@@ -722,13 +722,13 @@ def test_convert_server_tools_sanitises_message_history():
     assistant_msg = converted.messages[1]
     blocks = assistant_msg.content
     assert isinstance(blocks, list)
-    assert blocks[0]["type"] == "tool_use"
-    assert blocks[0]["name"] == "web_search"
+    assert blocks[0].type == "tool_use"
+    assert blocks[0].name == "web_search"
     # web_search_tool_result → text block
-    assert blocks[1]["type"] == "text"
-    assert "Result" in blocks[1]["text"]
+    assert blocks[1].type == "text"
+    assert "Result" in blocks[1].text
     # original text block unchanged
-    assert blocks[2]["type"] == "text"
+    assert blocks[2].type == "text"
 
 
 # ---------------------------------------------------------------------------

@@ -43,7 +43,10 @@ def get_user_facing_error_message(
                 return f"{base_msg} The model may not support image input. Use a vision-capable model (e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o)."
             if "vision" in raw_msg or "multimodal" in raw_msg:
                 return f"{base_msg} {raw_str[:150]}"
-        return "Invalid request sent to provider."
+        
+        # Strip common OpenAI error prefixes if they already exist
+        err_msg = str(e).replace("Invalid request sent to provider: ", "").strip()
+        return f"Invalid request sent to provider: {err_msg}"
 
     name = type(e).__name__
     status_code = getattr(e, "status_code", None)
@@ -62,12 +65,15 @@ def get_user_facing_error_message(
                 "vision",
                 "multimodal",
                 "content_policy",
-                "unsupported",
-                "not support",
+                "not support image",
+                "not support vision",
+                "unsupported model",
             ]
         ):
             return f"{msg} The model may not support image input. Use a vision-capable model (e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o)."
-        return "Invalid request sent to provider."
+        
+        err_msg = msg.replace("Invalid request sent to provider: ", "").strip()
+        return f"Invalid request sent to provider: {err_msg}"
     if name == "OverloadedError":
         return "Provider is currently overloaded. Please retry."
     if name == "APIError":
@@ -80,7 +86,14 @@ def get_user_facing_error_message(
         raw_error_str = str(raw_error).lower() if raw_error else ""
         if any(
             kw in msg_lower or kw in raw_error_str
-            for kw in ["image", "vision", "multimodal", "unsupported", "not support"]
+            for kw in [
+                "image",
+                "vision",
+                "multimodal",
+                "not support image",
+                "not support vision",
+                "unsupported model",
+            ]
         ):
             return f"{msg} The model may not support image input. Use a vision-capable model (e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o)."
         return "Provider API request failed."
@@ -92,7 +105,14 @@ def get_user_facing_error_message(
         raw_error_str = str(raw_error).lower() if raw_error else ""
         if any(
             kw in msg_lower or kw in raw_error_str
-            for kw in ["image", "vision", "multimodal", "unsupported", "not support"]
+            for kw in [
+                "image",
+                "vision",
+                "multimodal",
+                "not support image",
+                "not support vision",
+                "unsupported model",
+            ]
         ):
             return f"{msg} The model may not support image input. Use a vision-capable model (e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o)."
         return "Provider request failed."
@@ -103,7 +123,14 @@ def get_user_facing_error_message(
         msg_lower = message.lower()
         if any(
             kw in msg_lower
-            for kw in ["image", "vision", "multimodal", "unsupported", "not support"]
+            for kw in [
+                "image",
+                "vision",
+                "multimodal",
+                "not support image",
+                "not support vision",
+                "unsupported model",
+            ]
         ):
             return f"{message} The model may not support image input. Use a vision-capable model (e.g., Qwen-VL, Llama 3.2 Vision, GPT-4o)."
         return message

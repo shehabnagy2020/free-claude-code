@@ -89,7 +89,7 @@ class OpenAIChatTransport(BaseProvider):
             write=config.http_write_timeout,
         )
         http_client = None
-        if config.proxy:
+        if config.proxy and isinstance(config.proxy, str):
             http_client = httpx.AsyncClient(
                 proxy=config.proxy,
                 timeout=_timeout,
@@ -103,6 +103,16 @@ class OpenAIChatTransport(BaseProvider):
             http_client=http_client
             or httpx.AsyncClient(timeout=_timeout, limits=_limits),
         )
+        if self._api_key:
+            masked_key = f"{self._api_key[:4]}...{self._api_key[-4:]}"
+            logger.info(
+                "{} provider initialized with API key: {} (base_url: {})",
+                self._provider_name,
+                masked_key,
+                self._base_url,
+            )
+        else:
+            logger.warning("{} provider initialized with EMPTY API key!", self._provider_name)
 
     async def cleanup(self) -> None:
         """Release HTTP client resources."""
@@ -161,7 +171,8 @@ class OpenAIChatTransport(BaseProvider):
 
     def _process_tool_call(self, tc: dict, sse: SSEBuilder) -> Iterator[str]:
         """Process a single tool call delta and yield SSE events."""
-        tc_index = tc.get("index", 0)
+        raw_index = tc.get("index")
+        tc_index = int(raw_index) if raw_index is not None else 0
         if tc_index < 0:
             tc_index = len(sse.blocks.tool_states)
 
@@ -288,6 +299,10 @@ class OpenAIChatTransport(BaseProvider):
                         delta = choice.delta
                         if delta is None:
                             continue
+
+                        # Debug: log extra fields in delta (e.g. thought_signature)
+                        if hasattr(delta, "model_extra") and delta.model_extra:
+                            logger.debug("{} delta extra: {}", tag, delta.model_extra)
 
                         if choice.finish_reason:
                             finish_reason = choice.finish_reason
